@@ -42,7 +42,7 @@
 set -euo pipefail
 
 API="${BROWSER_AGENT_URL:-https://pezant.ca/api/browser-agent}"
-KEY="${BROWSER_AGENT_KEY:-browser-agent-key}"
+KEY="${BROWSER_AGENT_KEY:?BROWSER_AGENT_KEY not set — add to ~/.bashrc or export it}"
 DEFAULT_TAB="${BROWSER_AGENT_TAB:-}"
 TIMEOUT=30
 

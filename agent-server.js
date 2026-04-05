@@ -12,7 +12,11 @@ require("dotenv").config();
 const http = require("http");
 
 const PORT = process.env.BROWSER_AGENT_PORT || 3102;
-const API_KEY = process.env.BROWSER_AGENT_KEY || "browser-agent-key";
+const API_KEY = process.env.BROWSER_AGENT_KEY;
+if (!API_KEY) {
+  console.error("[Browser Agent] BROWSER_AGENT_KEY not set in environment. Exiting.");
+  process.exit(1);
+}
 
 // ── State ──
 
