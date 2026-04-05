@@ -17,8 +17,9 @@ scp -i "$VM_KEY" agent-server.js package.json ecosystem.config.js "$VM:$VM_PATH/
 # 2. Install deps + restart PM2
 $SSH "cd $VM_PATH && npm install --production && pm2 delete browser-agent 2>/dev/null; pm2 start ecosystem.config.js && pm2 save"
 
-# 3. Deploy TM userscript to web root
-scp -i "$VM_KEY" browser-agent.user.js "$VM:/var/www/html/browser-agent.user.js"
+# 3. Deploy TM userscript to web root (needs sudo)
+scp -i "$VM_KEY" browser-agent.user.js "$VM:/tmp/browser-agent.user.js"
+$SSH "sudo cp /tmp/browser-agent.user.js /var/www/html/browser-agent.user.js && sudo chown www-data:www-data /var/www/html/browser-agent.user.js"
 
 # 4. Add Apache proxy if not already present
 $SSH "grep -q 'browser-agent' /etc/apache2/sites-enabled/wordpress-https.conf 2>/dev/null || echo '
