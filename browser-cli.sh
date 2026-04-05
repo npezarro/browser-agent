@@ -10,7 +10,10 @@
 #   text [tabId] [maxLen]         Get body text
 #   html <selector> [tabId]       Get innerHTML of element
 #   click <"text"|selector> [tabId]  Click a button/link
-#   navigate <url> [tabId]        Navigate to URL
+#   navigate <url> [tabId]        Navigate current tab to URL
+#   open <url> [tabId]            Open URL in new tab
+#   close [tabId]                 Close tab
+#   ensure <url> [wait_s]         Reuse or open tab for URL, return tabId
 #   back [tabId]                  Go back
 #   reload [tabId]                Reload page
 #   eval <code> [tabId]           Execute JS in page context
@@ -36,7 +39,7 @@
 #
 # Environment:
 #   BROWSER_AGENT_URL   Server URL (default: https://pezant.ca/api/browser-agent)
-#   BROWSER_AGENT_KEY   Auth key (default: browser-agent-key)
+#   BROWSER_AGENT_KEY   Auth key (required)
 #   BROWSER_AGENT_TAB   Default tab ID (auto-detected if omitted)
 
 set -euo pipefail
@@ -126,6 +129,38 @@ case "$cmd" in
 
   open|open-tab)
     interactive "${2:-$DEFAULT_TAB}" "$(jq -nc --arg u "${1:?url required}" '{action:"openTab", url:$u}')"
+    ;;
+
+  close|close-tab)
+    interactive "${1:-$DEFAULT_TAB}" '{"action":"closeTab"}'
+    ;;
+
+  ensure)
+    # Open URL in a tab if no existing tab matches. Returns the tabId.
+    # Usage: browser-cli ensure <url> [wait_seconds]
+    local_url="${1:?url required}"
+    local_wait="${2:-6}"
+    # Check if any tab already has this URL (prefix match)
+    existing=$(curl -s "$API/agent/tabs" -H "$auth_header" | jq -r --arg u "$local_url" \
+      '[.tabs | to_entries[] | select(.value.url | startswith($u)) | .key] | first // empty')
+    if [ -n "$existing" ]; then
+      echo "{\"tabId\":\"$existing\",\"action\":\"reused\",\"url\":\"$local_url\"}"
+    else
+      # Open new tab from the most recent existing tab
+      interactive "" "$(jq -nc --arg u "$local_url" '{action:"openTab", url:$u}')" > /dev/null 2>&1
+      # Wait for the new tab to register
+      for i in $(seq 1 "$local_wait"); do
+        sleep 1
+        found=$(curl -s "$API/agent/tabs" -H "$auth_header" | jq -r --arg u "$local_url" \
+          '[.tabs | to_entries[] | select(.value.url | startswith($u)) | .key] | first // empty')
+        if [ -n "$found" ]; then
+          echo "{\"tabId\":\"$found\",\"action\":\"opened\",\"url\":\"$local_url\"}"
+          exit 0
+        fi
+      done
+      echo "{\"tabId\":null,\"action\":\"timeout\",\"url\":\"$local_url\"}" >&2
+      exit 1
+    fi
     ;;
 
   back)
