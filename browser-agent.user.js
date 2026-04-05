@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Browser Agent (Generic)
 // @namespace    https://pezant.ca
-// @version      1.3.0
+// @version      1.4.0
 // @description  Generic remote browser agent. Polls server for commands, executes them, reports results. Works on all pages.
 // @author       npezarro
 // @match        *://*/*
@@ -20,6 +20,9 @@
 
 (function () {
   "use strict";
+
+  // Skip iframes — only run in top-level windows
+  if (window.self !== window.top) return;
 
   const VERSION = GM_info.script.version;
   const API = "https://pezant.ca/api/browser-agent/agent";
