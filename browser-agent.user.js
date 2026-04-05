@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Browser Agent (Generic)
 // @namespace    https://pezant.ca
-// @version      1.0.0
+// @version      1.1.0
 // @description  Generic remote browser agent. Polls server for commands, executes them, reports results. Works on all pages.
 // @author       npezarro
 // @match        *://*/*
@@ -206,6 +206,11 @@
         case "navigate":
           window.location.href = cmd.url;
           result = { navigating: true };
+          break;
+
+        case "openTab":
+          window.open(cmd.url, "_blank");
+          result = { opened: true, url: cmd.url };
           break;
 
         case "back":

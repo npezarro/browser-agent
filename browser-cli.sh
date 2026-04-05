@@ -124,6 +124,10 @@ case "$cmd" in
     interactive "${2:-$DEFAULT_TAB}" "$(jq -nc --arg u "${1:?url required}" '{action:"navigate", url:$u}')"
     ;;
 
+  open|open-tab)
+    interactive "${2:-$DEFAULT_TAB}" "$(jq -nc --arg u "${1:?url required}" '{action:"openTab", url:$u}')"
+    ;;
+
   back)
     interactive "${1:-$DEFAULT_TAB}" '{"action":"back"}'
     ;;
