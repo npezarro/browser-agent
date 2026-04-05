@@ -218,7 +218,9 @@ const server = http.createServer(async (req, res) => {
       if (!target) {
         const tabIds = Object.keys(agentTabs);
         if (tabIds.length === 0) return json(res, { error: "No browser tabs connected" }, 503);
-        target = tabIds[0]; // default to first active tab
+        // Pick the most recently active tab
+        tabIds.sort((a, b) => (agentTabs[b].receivedAt || 0) - (agentTabs[a].receivedAt || 0));
+        target = tabIds[0];
       }
 
       // Assign ID and queue
