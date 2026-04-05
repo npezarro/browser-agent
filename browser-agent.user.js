@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Browser Agent (Generic)
 // @namespace    https://pezant.ca
-// @version      1.2.0
+// @version      1.3.0
 // @description  Generic remote browser agent. Polls server for commands, executes them, reports results. Works on all pages.
 // @author       npezarro
 // @match        *://*/*
@@ -205,9 +205,11 @@
         }
 
         case "navigate":
+          // Post result before navigating — page unload kills the script
+          post("/result", { tabId, id, ok: true, result: { navigating: true, url: cmd.url } });
+          await new Promise((r) => setTimeout(r, 200)); // let POST fire
           window.location.href = cmd.url;
-          result = { navigating: true };
-          break;
+          return null; // signal: already posted
 
         case "openTab":
           window.open(cmd.url, "_blank");
@@ -215,14 +217,16 @@
           break;
 
         case "back":
+          post("/result", { tabId, id, ok: true, result: { navigating: true, direction: "back" } });
+          await new Promise((r) => setTimeout(r, 200));
           window.history.back();
-          result = { navigating: true };
-          break;
+          return null;
 
         case "reload":
+          post("/result", { tabId, id, ok: true, result: { reloading: true } });
+          await new Promise((r) => setTimeout(r, 200));
           window.location.reload();
-          result = { reloading: true };
-          break;
+          return null;
 
         case "wait":
           await new Promise((r) => setTimeout(r, cmd.ms || 1000));
@@ -467,7 +471,7 @@
           for (const cmd of data.commands) {
             log(`Exec: ${cmd.action}${cmd.selector ? ` ${cmd.selector}` : ""}${cmd.text ? ` "${cmd.text}"` : ""}`);
             const result = await execCommand(cmd);
-            post("/result", { tabId, ...result });
+            if (result) post("/result", { tabId, ...result });
 
             if (data.commands.length > 1) {
               await new Promise((r) => setTimeout(r, 300));
