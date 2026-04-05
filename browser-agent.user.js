@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Browser Agent (Generic)
 // @namespace    https://pezant.ca
-// @version      1.1.0
+// @version      1.2.0
 // @description  Generic remote browser agent. Polls server for commands, executes them, reports results. Works on all pages.
 // @author       npezarro
 // @match        *://*/*
@@ -24,9 +24,10 @@
   const VERSION = GM_info.script.version;
   const API = "https://pezant.ca/api/browser-agent/agent";
   const POLL_MS = 3000;
-  const TAB_ID = GM_getValue("_tabId", "");
-  const tabId = TAB_ID || `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-  if (!TAB_ID) GM_setValue("_tabId", tabId);
+  // Use sessionStorage for per-tab ID (survives SPA navigation, unique per tab)
+  const stored = sessionStorage.getItem("_browserAgentTabId");
+  const tabId = stored || `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  if (!stored) sessionStorage.setItem("_browserAgentTabId", tabId);
 
   // ── Console log capture ──
   const consoleLogs = [];
