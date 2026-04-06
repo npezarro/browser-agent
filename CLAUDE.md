@@ -41,6 +41,16 @@ After deploy, update the TM script in Edge (auto-update or reinstall from `pezan
 - **Most-recent-tab default** — When no tabId specified, server picks the tab with the latest heartbeat
 - **No hardcoded API key** — Server exits if `BROWSER_AGENT_KEY` is unset; CLI fails with clear error
 
+## Multi-Tab Orchestration (v1.5.0+)
+
+The CLI supports multi-tab workflows beyond single-tab command execution:
+
+- **`browser-cli ensure <url>`** — Idempotent tab creation. Reuses an existing tab if the URL is already open, otherwise opens a new one. Returns the tabId for subsequent commands. Use this instead of `openTab` when you want at-most-one-tab-per-URL semantics.
+- **`browser-cli close [tabId]`** — Closes a tab opened by the script. If no tabId, closes the most recent tab.
+- **`browser-cli openTab <url>`** — Opens a new tab unconditionally via `window.open()`.
+
+**Why this matters:** Agents running multi-step browser workflows (e.g., claim a game on one site, redeem a code on another) can now manage tab lifecycle without manual intervention. The `ensure` pattern prevents duplicate tabs when retrying failed flows.
+
 ## install.html
 
 Version-controlled in this repo. Deploy script copies it to `/var/www/html/install.html`. When adding new TM scripts to the ecosystem, add them here.
