@@ -41,6 +41,22 @@ After deploy, update the TM script in Edge (auto-update or reinstall from `pezan
 - **Most-recent-tab default** — When no tabId specified, server picks the tab with the latest heartbeat
 - **No hardcoded API key** — Server exits if `BROWSER_AGENT_KEY` is unset; CLI fails with clear error
 
+## Cowork Session Capture
+
+The relay server hosts `/cowork/*` endpoints for capturing Claude Cowork browser extension sessions:
+
+- `POST /cowork/snapshot` — Receive conversation snapshots from cowork-bridge extension
+- `POST /cowork/end` — Mark session as ended
+- `GET /cowork/sessions` — List captured sessions
+- `GET /cowork/read/:id` — Read a specific session
+- `GET /cowork/pending` — Poll for CLI-initiated sessions
+- `POST /cowork/start` — Queue a new Cowork session from CLI
+- `GET /cowork/summary` — Session summary
+- `GET /cowork/config` — Extension config
+- `POST /cowork/attach` / `POST /cowork/detach` — Remote debugger attach/detach
+
+Sessions persisted to disk as JSON + markdown. See `~/repos/cowork-bridge/` for the Chrome extension.
+
 ## Multi-Tab Orchestration (v1.5.0+)
 
 The CLI supports multi-tab workflows beyond single-tab command execution:
