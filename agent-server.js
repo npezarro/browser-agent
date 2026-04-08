@@ -38,8 +38,11 @@ const resultWaiters = {};    // cmdId -> { resolve, timer }
 // ── Cowork State ──
 
 const COWORK_DIR = process.env.COWORK_SESSION_DIR || "/home/deployuser/cowork-sessions";
+const COWORK_REPO = process.env.COWORK_REPO_DIR || "/home/deployuser/my-claude-cowork";
+const COWORK_WEBHOOK = process.env.DISCORD_COWORK_WEBHOOK_URL || "";
 const coworkSessions = {};   // sessionId -> { slug, goal, startedAt, status, turns, lastHeartbeat, capturedAt }
 let coworkPending = null;    // CLI-queued session start request
+const { execFile } = require("child_process");
 
 // ── Helpers ──
 
@@ -146,6 +149,7 @@ function snapshotToMarkdown(sessionId, session) {
   md += `- **Started**: ${started}\n`;
   md += `- **Goal**: ${session.goal || "Cowork session"}\n`;
   md += `- **Status**: ${session.status || "unknown"}\n`;
+  if (session.model) md += `- **Model**: ${session.model}\n`;
   md += `- **Source**: cowork-bridge (auto-captured)\n\n`;
 
   md += `## Turns\n\n`;
@@ -168,6 +172,142 @@ function snapshotToMarkdown(sessionId, session) {
   }
 
   return md;
+}
+
+// ── Cowork Discord Posting ──
+
+function postToDiscord(session) {
+  if (!COWORK_WEBHOOK) {
+    console.log("[Cowork] No DISCORD_COWORK_WEBHOOK_URL set, skipping Discord post");
+    return;
+  }
+
+  const turnCount = session.turns?.length || 0;
+  const status = session.status || "completed";
+  const color = status === "completed" ? 3066993 : status === "interrupted" ? 15105570 : 3447003;
+  const model = session.model || "";
+
+  // Build turn summary (last 3 turns, truncated)
+  const recentTurns = (session.turns || []).slice(-3).map((t) => {
+    const role = t.role === "human" ? "**User**" : "**Claude**";
+    const text = t.content.slice(0, 200).replace(/\n/g, " ");
+    return `${role}: ${text}${t.content.length > 200 ? "..." : ""}`;
+  }).join("\n");
+
+  const description = [
+    `**Turns:** ${turnCount}`,
+    model ? `**Model:** ${model}` : "",
+    `**Status:** ${status}`,
+    session.reason ? `**Reason:** ${session.reason}` : "",
+    "",
+    recentTurns || "(no turns captured)",
+  ].filter(Boolean).join("\n").slice(0, 3900);
+
+  const payload = JSON.stringify({
+    username: "Cowork Bridge",
+    embeds: [{
+      title: `Cowork: ${session.slug || "session"}`,
+      description,
+      color,
+      timestamp: new Date().toISOString(),
+      footer: { text: "Cowork Bridge (auto-captured)" },
+    }],
+  });
+
+  const url = new URL(`${COWORK_WEBHOOK}?wait=true`);
+  const options = {
+    hostname: url.hostname,
+    port: 443,
+    path: url.pathname + url.search,
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) },
+  };
+
+  const https = require("https");
+  const req = https.request(options, (res) => {
+    let body = "";
+    res.on("data", (c) => (body += c));
+    res.on("end", () => {
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        console.log(`[Cowork] Discord posted: ${session.slug}`);
+      } else {
+        console.error(`[Cowork] Discord post failed (${res.statusCode}): ${body.slice(0, 200)}`);
+      }
+    });
+  });
+  req.on("error", (err) => console.error(`[Cowork] Discord post error: ${err.message}`));
+  req.write(payload);
+  req.end();
+}
+
+// ── Cowork Git Sync ──
+
+function syncToGitRepo(sessionId) {
+  const session = coworkSessions[sessionId];
+  if (!session || !session.turns?.length) return;
+
+  // Check if the cowork repo exists on the VM
+  try {
+    if (!fs.existsSync(path.join(COWORK_REPO, ".git"))) {
+      console.log(`[Cowork] Git repo not found at ${COWORK_REPO}, cloning...`);
+      execFile("git", ["clone", "https://github.com/npezarro/my-claude-cowork.git", COWORK_REPO], (err) => {
+        if (err) console.error(`[Cowork] Git clone failed: ${err.message}`);
+        else doGitSync(sessionId);
+      });
+      return;
+    }
+  } catch {}
+
+  doGitSync(sessionId);
+}
+
+function doGitSync(sessionId) {
+  const session = coworkSessions[sessionId];
+  if (!session) return;
+
+  const date = (session.startedAt || new Date().toISOString()).slice(0, 10);
+  const sessionDir = path.join(COWORK_REPO, "sessions", date);
+  ensureDir(sessionDir);
+
+  const md = snapshotToMarkdown(sessionId, session);
+  const mdPath = path.join(sessionDir, `${session.slug || sessionId}.md`);
+
+  try {
+    fs.writeFileSync(mdPath, md);
+  } catch (err) {
+    console.error(`[Cowork] Failed to write session to repo: ${err.message}`);
+    return;
+  }
+
+  // Git add, commit, push
+  const gitOpts = { cwd: COWORK_REPO };
+  execFile("git", ["add", "sessions/"], gitOpts, (err) => {
+    if (err) { console.error(`[Cowork] git add failed: ${err.message}`); return; }
+
+    const msg = `Auto-capture: ${session.slug} (${session.turns.length} turns)`;
+    execFile("git", ["commit", "-m", msg], gitOpts, (err) => {
+      if (err) {
+        if (err.message.includes("nothing to commit")) {
+          console.log("[Cowork] Git: nothing new to commit");
+        } else {
+          console.error(`[Cowork] git commit failed: ${err.message}`);
+        }
+        return;
+      }
+
+      execFile("git", ["push", "origin", "master"], gitOpts, (err) => {
+        if (err) {
+          // Try main branch
+          execFile("git", ["push", "origin", "main"], gitOpts, (err2) => {
+            if (err2) console.error(`[Cowork] git push failed: ${err2.message}`);
+            else console.log(`[Cowork] Git synced: ${session.slug} → main`);
+          });
+        } else {
+          console.log(`[Cowork] Git synced: ${session.slug} → master`);
+        }
+      });
+    });
+  });
 }
 
 // ── Server ──
@@ -351,14 +491,50 @@ const server = http.createServer(async (req, res) => {
       const sid = data.sessionId;
       if (!sid) return json(res, { error: "sessionId required" }, 400);
 
+      const newTurnCount = (data.turns || []).length;
+      const existing = coworkSessions[sid];
+
+      // Multi-session detection: if turn count dropped, user cleared chat
+      if (existing && existing.turns?.length > 0 && newTurnCount < existing.turns.length) {
+        console.log(`[Cowork] Chat cleared detected (${existing.turns.length} → ${newTurnCount}). Ending previous session.`);
+
+        // End the old session
+        existing.status = "completed";
+        existing.reason = "chat-cleared";
+        existing.endedAt = new Date().toISOString();
+        persistCoworkSession(sid);
+        persistCoworkMarkdown(sid);
+        postToDiscord(existing);
+        syncToGitRepo(sid);
+
+        // Start fresh — create new session ID by appending a counter
+        const newSid = `${sid}-${Date.now()}`;
+        coworkSessions[newSid] = {
+          slug: `${data.slug}-${Date.now().toString(36).slice(-4)}`,
+          goal: data.goal,
+          startedAt: data.capturedAt || new Date().toISOString(),
+          status: "in-progress",
+          turns: data.turns || [],
+          turnCount: newTurnCount,
+          model: data.model,
+          url: data.url,
+          capturedAt: data.capturedAt || new Date().toISOString(),
+          lastHeartbeat: Date.now(),
+        };
+        persistCoworkSession(newSid);
+        console.log(`[Cowork] New session after clear: ${coworkSessions[newSid].slug}`);
+        return json(res, { ok: true, newSessionId: newSid });
+      }
+
       coworkSessions[sid] = {
-        ...coworkSessions[sid],
+        ...existing,
         slug: data.slug,
         goal: data.goal,
-        startedAt: data.startedAt,
+        startedAt: data.startedAt || existing?.startedAt,
         status: data.status || "in-progress",
         turns: data.turns || [],
-        turnCount: data.turnCount || (data.turns || []).length,
+        turnCount: newTurnCount,
+        model: data.model,
         url: data.url,
         capturedAt: data.capturedAt || new Date().toISOString(),
         lastHeartbeat: Date.now(),
@@ -367,7 +543,7 @@ const server = http.createServer(async (req, res) => {
       // Persist to disk
       persistCoworkSession(sid);
 
-      console.log(`[Cowork] Snapshot: ${data.slug} (${(data.turns || []).length} turns)`);
+      console.log(`[Cowork] Snapshot: ${data.slug} (${newTurnCount} turns)`);
     } catch (err) {
       console.error("[Cowork] Snapshot error:", err.message);
     }
@@ -415,6 +591,12 @@ const server = http.createServer(async (req, res) => {
       // Persist JSON + markdown
       persistCoworkSession(sid);
       persistCoworkMarkdown(sid);
+
+      // Post to Discord #cowork
+      postToDiscord(coworkSessions[sid]);
+
+      // Sync to my-claude-cowork git repo
+      syncToGitRepo(sid);
 
       console.log(`[Cowork] Session ended: ${coworkSessions[sid].slug} (${data.reason}, ${coworkSessions[sid].turns.length} turns)`);
     } catch (err) {
