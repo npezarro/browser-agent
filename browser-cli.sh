@@ -39,6 +39,9 @@
 #
 # Cowork commands:
 #   cowork-status                 Check if Cowork panel is active
+#   cowork-attach                 Remote-attach debugger to Cowork panel
+#   cowork-detach                 Remote-detach debugger
+#   cowork-scrape                 Trigger immediate scrape
 #   cowork-sessions [--today]     List captured Cowork sessions
 #   cowork-read <session-id>      Read a specific session's content
 #   cowork-start "goal" [--instructions file.md]  Queue a new Cowork session
@@ -265,6 +268,31 @@ case "$cmd" in
 
   cowork-status|cws)
     curl -s "$API/cowork/status" -H "$auth_header" | jq '.'
+    ;;
+
+  cowork-attach|cwa)
+    # Remote-attach: tells the extension to attach its debugger to the Cowork panel
+    curl -s -X POST "$API/cowork/start" \
+      -H "Content-Type: application/json" \
+      -H "$auth_header" \
+      -d '{"goal":"__attach__"}' | jq '.'
+    echo "Sent attach command to extension. It will auto-attach on next poll (~10s)."
+    ;;
+
+  cowork-detach|cwd)
+    curl -s -X POST "$API/cowork/start" \
+      -H "Content-Type: application/json" \
+      -H "$auth_header" \
+      -d '{"goal":"__detach__"}' | jq '.'
+    echo "Sent detach command to extension."
+    ;;
+
+  cowork-scrape|cwsc)
+    curl -s -X POST "$API/cowork/start" \
+      -H "Content-Type: application/json" \
+      -H "$auth_header" \
+      -d '{"goal":"__scrape__"}' | jq '.'
+    echo "Sent scrape command to extension."
     ;;
 
   cowork-sessions|cwl)

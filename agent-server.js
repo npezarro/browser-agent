@@ -440,6 +440,38 @@ const server = http.createServer(async (req, res) => {
     return json(res, { ok: true });
   }
 
+  // Summary — unauthenticated, lightweight session list for the popup
+  if (req.method === "GET" && path === "/cowork/summary") {
+    const sessions = Object.entries(coworkSessions)
+      .map(([id, s]) => ({
+        id,
+        slug: s.slug,
+        goal: s.goal,
+        status: s.status,
+        turnCount: s.turnCount || 0,
+        startedAt: s.startedAt,
+      }))
+      .sort((a, b) => (b.startedAt || "").localeCompare(a.startedAt || ""))
+      .slice(0, 10);
+    return json(res, { sessions, count: sessions.length });
+  }
+
+  // Config — unauthenticated, serves remote selectors + settings to the extension
+  if (req.method === "GET" && path === "/cowork/config") {
+    return json(res, {
+      selectors: {
+        turnElements: '[data-test-id="user-message"], [data-test-id="assistant-message"], [data-testid="user-message"], [data-testid="assistant-message"]',
+        userMessage: '[data-test-id="user-message"], [data-testid="user-message"]',
+        assistantMessage: '[data-test-id="assistant-message"], [data-testid="assistant-message"]',
+        inputField: '[data-test-id="message-input"]',
+        sendButton: '[data-test-id="send-button"]',
+        modelSelector: 'button[aria-label*="Model selector"]',
+      },
+      scrapeIntervalMs: 30000,
+      version: "1.2.0",
+    });
+  }
+
   // ── Cowork control endpoints (auth required — called by CLI) ──
 
   // List sessions
