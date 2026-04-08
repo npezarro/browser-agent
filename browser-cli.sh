@@ -295,6 +295,15 @@ case "$cmd" in
     echo "Sent scrape command to extension."
     ;;
 
+  cowork-targets|cwt)
+    # Debug: dump all debugger targets the extension can see
+    curl -s -X POST "$API/cowork/start" \
+      -H "Content-Type: application/json" \
+      -H "$auth_header" \
+      -d '{"goal":"__targets__"}' | jq '.'
+    echo "Sent targets dump command. Check logs in ~10s: browser-cli logs"
+    ;;
+
   cowork-sessions|cwl)
     local_date=""
     if [[ "${1:-}" == "--today" ]]; then
