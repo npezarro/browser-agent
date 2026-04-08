@@ -9,8 +9,8 @@ SSH="ssh -i $VM_KEY $VM"
 
 echo "=== Deploying browser-agent to VM ==="
 
-# 1. Sync files to VM
-$SSH "mkdir -p $VM_PATH"
+# 1. Sync files to VM + ensure cowork sessions dir
+$SSH "mkdir -p $VM_PATH /home/deployuser/cowork-sessions"
 scp -i "$VM_KEY" agent-server.js package.json ecosystem.config.js .env "$VM:$VM_PATH/" 2>/dev/null || \
 scp -i "$VM_KEY" agent-server.js package.json ecosystem.config.js "$VM:$VM_PATH/"
 

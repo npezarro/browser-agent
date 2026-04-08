@@ -37,6 +37,14 @@
 #   health                        Server health check
 #   ping [tabId]                  Ping browser agent
 #
+# Cowork commands:
+#   cowork-status                 Check if Cowork panel is active
+#   cowork-sessions [--today]     List captured Cowork sessions
+#   cowork-read <session-id>      Read a specific session's content
+#   cowork-start "goal" [--instructions file.md]  Queue a new Cowork session
+#   cowork-export [session-id]    Export session to my-claude-cowork format
+#   cowork-sync                   Sync all captured sessions to git + Discord
+#
 # Environment:
 #   BROWSER_AGENT_URL   Server URL (default: https://pezant.ca/api/browser-agent)
 #   BROWSER_AGENT_KEY   Auth key (required)
@@ -253,8 +261,105 @@ case "$cmd" in
     interactive "${1:-$DEFAULT_TAB}" '{"action":"ping"}'
     ;;
 
+  # ── Cowork commands ──
+
+  cowork-status|cws)
+    curl -s "$API/cowork/status" -H "$auth_header" | jq '.'
+    ;;
+
+  cowork-sessions|cwl)
+    local_date=""
+    if [[ "${1:-}" == "--today" ]]; then
+      local_date=$(date +%Y-%m-%d)
+    elif [[ -n "${1:-}" ]]; then
+      local_date="$1"
+    fi
+    if [ -n "$local_date" ]; then
+      curl -s "$API/cowork/sessions?date=$local_date" -H "$auth_header" | jq '.sessions[] | {id, slug, goal, status, turnCount, startedAt}'
+    else
+      curl -s "$API/cowork/sessions" -H "$auth_header" | jq '.sessions[] | {id, slug, goal, status, turnCount, startedAt}'
+    fi
+    ;;
+
+  cowork-read|cwr)
+    local_sid="${1:?session-id required}"
+    curl -s "$API/cowork/session/$local_sid" -H "$auth_header" | jq '.'
+    ;;
+
+  cowork-start|cwstart)
+    local_goal="${1:?goal required}"
+    local_instructions=""
+    if [[ "${2:-}" == "--instructions" ]]; then
+      local_file="${3:?instructions file required}"
+      if [ ! -f "$local_file" ]; then
+        echo "ERROR: File not found: $local_file" >&2
+        exit 1
+      fi
+      local_instructions=$(cat "$local_file")
+    fi
+    curl -s -X POST "$API/cowork/start" \
+      -H "Content-Type: application/json" \
+      -H "$auth_header" \
+      -d "$(jq -nc --arg g "$local_goal" --arg i "$local_instructions" '{goal: $g, instructions: $i}')" | jq '.'
+    ;;
+
+  cowork-export|cwx)
+    local_sid="${1:-}"
+    local_cowork_dir="$HOME/repos/my-claude-cowork/sessions"
+
+    if [ -z "$local_sid" ]; then
+      # Export all sessions from today
+      local_today=$(date +%Y-%m-%d)
+      local_sessions=$(curl -s "$API/cowork/sessions?date=$local_today" -H "$auth_header")
+      local_count=$(echo "$local_sessions" | jq '.count')
+      echo "Exporting $local_count sessions from $local_today..."
+
+      echo "$local_sessions" | jq -r '.sessions[].id' | while read -r sid; do
+        local_session=$(curl -s "$API/cowork/session/$sid" -H "$auth_header")
+        local_slug=$(echo "$local_session" | jq -r '.session.slug')
+        local_dir="$local_cowork_dir/$local_today"
+        mkdir -p "$local_dir"
+        echo "$local_session" | jq '.session' > "$local_dir/${local_slug}.json"
+        echo "  Exported: $local_dir/${local_slug}.json"
+      done
+    else
+      local_session=$(curl -s "$API/cowork/session/$local_sid" -H "$auth_header")
+      local_slug=$(echo "$local_session" | jq -r '.session.slug')
+      local_date=$(echo "$local_session" | jq -r '.session.startedAt' | cut -c1-10)
+      local_dir="$local_cowork_dir/$local_date"
+      mkdir -p "$local_dir"
+      echo "$local_session" | jq '.session' > "$local_dir/${local_slug}.json"
+      echo "Exported: $local_dir/${local_slug}.json"
+    fi
+    ;;
+
+  cowork-sync|cwsync)
+    echo "Syncing cowork sessions from VM..."
+    local_cowork_dir="$HOME/repos/my-claude-cowork/sessions"
+    local_today=$(date +%Y-%m-%d)
+    mkdir -p "$local_cowork_dir/$local_today"
+
+    # Pull markdown files from VM
+    scp -i "$HOME/.ssh/vm_key" \
+      "deployuser@pezant.ca:/home/deployuser/cowork-sessions/$local_today/*.md" \
+      "$local_cowork_dir/$local_today/" 2>/dev/null || echo "No sessions to sync for $local_today"
+
+    # Git commit if in repo
+    if [ -d "$HOME/repos/my-claude-cowork/.git" ]; then
+      cd "$HOME/repos/my-claude-cowork"
+      if [ -n "$(git status --porcelain sessions/)" ]; then
+        git add sessions/
+        git commit -m "Auto-sync cowork sessions $local_today"
+        git push origin main 2>/dev/null || git push origin master 2>/dev/null || true
+        echo "Committed and pushed session logs"
+      else
+        echo "No new sessions to commit"
+      fi
+    fi
+    ;;
+
   help|--help|-h)
-    head -45 "$0" | tail -43
+    head -55 "$0" | tail -53
     ;;
 
   *)

@@ -18,6 +18,9 @@ if (!API_KEY) {
   process.exit(1);
 }
 
+const fs = require("fs");
+const path = require("path");
+
 // ── State ──
 
 const agentCommands = {};    // tabId -> [commands]
@@ -31,6 +34,12 @@ let cmdIdCounter = 0;
 
 // Waiters for synchronous /interactive endpoint
 const resultWaiters = {};    // cmdId -> { resolve, timer }
+
+// ── Cowork State ──
+
+const COWORK_DIR = process.env.COWORK_SESSION_DIR || "/home/deployuser/cowork-sessions";
+const coworkSessions = {};   // sessionId -> { slug, goal, startedAt, status, turns, lastHeartbeat, capturedAt }
+let coworkPending = null;    // CLI-queued session start request
 
 // ── Helpers ──
 
@@ -86,6 +95,79 @@ function pushResult(result) {
     delete resultWaiters[result.id];
     waiter.resolve(result);
   }
+}
+
+// ── Cowork Persistence ──
+
+function ensureDir(dir) {
+  try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+}
+
+function persistCoworkSession(sessionId) {
+  const session = coworkSessions[sessionId];
+  if (!session) return;
+
+  const date = (session.startedAt || new Date().toISOString()).slice(0, 10);
+  const dir = path.join(COWORK_DIR, date);
+  ensureDir(dir);
+
+  const filePath = path.join(dir, `${session.slug || sessionId}.json`);
+  try {
+    fs.writeFileSync(filePath, JSON.stringify({ id: sessionId, ...session }, null, 2));
+  } catch (err) {
+    console.error(`[Cowork] Failed to persist JSON: ${err.message}`);
+  }
+}
+
+function persistCoworkMarkdown(sessionId) {
+  const session = coworkSessions[sessionId];
+  if (!session || !session.turns?.length) return;
+
+  const date = (session.startedAt || new Date().toISOString()).slice(0, 10);
+  const dir = path.join(COWORK_DIR, date);
+  ensureDir(dir);
+
+  const md = snapshotToMarkdown(sessionId, session);
+  const filePath = path.join(dir, `${session.slug || sessionId}.md`);
+  try {
+    fs.writeFileSync(filePath, md);
+    console.log(`[Cowork] Wrote markdown: ${filePath}`);
+  } catch (err) {
+    console.error(`[Cowork] Failed to persist markdown: ${err.message}`);
+  }
+}
+
+function snapshotToMarkdown(sessionId, session) {
+  const started = session.startedAt
+    ? new Date(session.startedAt).toISOString().replace("T", " ").slice(0, 16)
+    : "unknown";
+
+  let md = `# Session: ${session.slug || sessionId}\n`;
+  md += `- **Started**: ${started}\n`;
+  md += `- **Goal**: ${session.goal || "Cowork session"}\n`;
+  md += `- **Status**: ${session.status || "unknown"}\n`;
+  md += `- **Source**: cowork-bridge (auto-captured)\n\n`;
+
+  md += `## Turns\n\n`;
+
+  let turnNum = 0;
+  for (const turn of session.turns) {
+    turnNum++;
+    const time = turn.ts
+      ? new Date(turn.ts).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })
+      : "--:--";
+
+    md += `### Turn ${turnNum} — ${time}\n`;
+    md += `**${turn.role === "human" ? "User" : "Assistant"}**: ${turn.content.slice(0, 2000)}\n\n`;
+  }
+
+  if (session.status === "completed" || session.status === "interrupted") {
+    md += `## Final Summary\n`;
+    md += `Session ${session.status} with ${session.turns.length} turns. `;
+    md += `Reason: ${session.reason || "normal end"}.\n`;
+  }
+
+  return md;
 }
 
 // ── Server ──
@@ -243,6 +325,178 @@ const server = http.createServer(async (req, res) => {
       });
 
       return json(res, result);
+    } catch (err) {
+      return json(res, { error: err.message }, 400);
+    }
+  }
+
+  // ── Cowork endpoints (no auth — called by Chrome extension) ──
+
+  // Heartbeat
+  if (req.method === "POST" && path === "/cowork/heartbeat") {
+    try {
+      const data = await readBody(req);
+      if (data.sessionId && coworkSessions[data.sessionId]) {
+        coworkSessions[data.sessionId].lastHeartbeat = Date.now();
+        coworkSessions[data.sessionId].status = data.status || "active";
+      }
+    } catch {}
+    return json(res, { ok: true });
+  }
+
+  // Snapshot — full session state from extension
+  if (req.method === "POST" && path === "/cowork/snapshot") {
+    try {
+      const data = await readBody(req);
+      const sid = data.sessionId;
+      if (!sid) return json(res, { error: "sessionId required" }, 400);
+
+      coworkSessions[sid] = {
+        ...coworkSessions[sid],
+        slug: data.slug,
+        goal: data.goal,
+        startedAt: data.startedAt,
+        status: data.status || "in-progress",
+        turns: data.turns || [],
+        turnCount: data.turnCount || (data.turns || []).length,
+        url: data.url,
+        capturedAt: data.capturedAt || new Date().toISOString(),
+        lastHeartbeat: Date.now(),
+      };
+
+      // Persist to disk
+      persistCoworkSession(sid);
+
+      console.log(`[Cowork] Snapshot: ${data.slug} (${(data.turns || []).length} turns)`);
+    } catch (err) {
+      console.error("[Cowork] Snapshot error:", err.message);
+    }
+    return json(res, { ok: true });
+  }
+
+  // Turn — incremental turn update
+  if (req.method === "POST" && path === "/cowork/turn") {
+    try {
+      const data = await readBody(req);
+      const sid = data.sessionId;
+      if (sid && coworkSessions[sid] && data.turn) {
+        const session = coworkSessions[sid];
+        // Add turn if it's genuinely new
+        if (data.turnIndex >= session.turns.length) {
+          session.turns.push(data.turn);
+          session.turnCount = session.turns.length;
+          console.log(`[Cowork] Turn ${data.turnIndex}: ${data.turn.role} (${data.turn.content.slice(0, 60)}...)`);
+        }
+      }
+    } catch {}
+    return json(res, { ok: true });
+  }
+
+  // End — session ended
+  if (req.method === "POST" && path === "/cowork/end") {
+    try {
+      const data = await readBody(req);
+      const sid = data.sessionId;
+      if (!sid) return json(res, { error: "sessionId required" }, 400);
+
+      // Update or create session record
+      coworkSessions[sid] = {
+        ...coworkSessions[sid],
+        slug: data.slug || coworkSessions[sid]?.slug,
+        goal: data.goal || coworkSessions[sid]?.goal,
+        startedAt: data.startedAt || coworkSessions[sid]?.startedAt,
+        status: data.reason === "page-unload" ? "interrupted" : "completed",
+        turns: data.turns || coworkSessions[sid]?.turns || [],
+        reason: data.reason,
+        endedAt: new Date().toISOString(),
+      };
+      coworkSessions[sid].turnCount = coworkSessions[sid].turns.length;
+
+      // Persist JSON + markdown
+      persistCoworkSession(sid);
+      persistCoworkMarkdown(sid);
+
+      console.log(`[Cowork] Session ended: ${coworkSessions[sid].slug} (${data.reason}, ${coworkSessions[sid].turns.length} turns)`);
+    } catch (err) {
+      console.error("[Cowork] End error:", err.message);
+    }
+    return json(res, { ok: true });
+  }
+
+  // Poll for pending CLI-initiated sessions
+  if (req.method === "GET" && path === "/cowork/pending") {
+    return json(res, { ok: true, pending: coworkPending });
+  }
+
+  // Acknowledge pending session pickup
+  if (req.method === "POST" && path === "/cowork/pending/ack") {
+    try {
+      const data = await readBody(req);
+      if (coworkPending && data.requestId === coworkPending.requestId) {
+        console.log(`[Cowork] Pending session acknowledged: ${coworkPending.goal}`);
+        coworkPending = null;
+      }
+    } catch {}
+    return json(res, { ok: true });
+  }
+
+  // ── Cowork control endpoints (auth required — called by CLI) ──
+
+  // List sessions
+  if (req.method === "GET" && path === "/cowork/sessions") {
+    if (!checkAuth(req)) return json(res, { error: "Unauthorized" }, 401);
+    const today = parsed?.searchParams?.get("date") || "";
+    const sessions = Object.entries(coworkSessions)
+      .filter(([_, s]) => !today || (s.startedAt || "").startsWith(today))
+      .map(([id, s]) => ({
+        id,
+        slug: s.slug,
+        goal: s.goal,
+        status: s.status,
+        turnCount: s.turnCount || 0,
+        startedAt: s.startedAt,
+        endedAt: s.endedAt,
+      }))
+      .sort((a, b) => (b.startedAt || "").localeCompare(a.startedAt || ""));
+    return json(res, { sessions, count: sessions.length });
+  }
+
+  // Read specific session
+  if (req.method === "GET" && path.startsWith("/cowork/session/")) {
+    if (!checkAuth(req)) return json(res, { error: "Unauthorized" }, 401);
+    const sid = path.replace("/cowork/session/", "");
+    const session = coworkSessions[sid];
+    if (!session) return json(res, { error: "Session not found" }, 404);
+    return json(res, { session: { id: sid, ...session } });
+  }
+
+  // Check if Cowork is active
+  if (req.method === "GET" && path === "/cowork/status") {
+    if (!checkAuth(req)) return json(res, { error: "Unauthorized" }, 401);
+    const activeSessions = Object.entries(coworkSessions)
+      .filter(([_, s]) => s.status === "active" || s.status === "in-progress")
+      .filter(([_, s]) => Date.now() - (s.lastHeartbeat || 0) < 60_000)
+      .map(([id, s]) => ({ id, slug: s.slug, goal: s.goal, turnCount: s.turnCount }));
+    return json(res, {
+      active: activeSessions.length > 0,
+      sessions: activeSessions,
+      pending: !!coworkPending,
+    });
+  }
+
+  // Queue a new session start request
+  if (req.method === "POST" && path === "/cowork/start") {
+    if (!checkAuth(req)) return json(res, { error: "Unauthorized" }, 401);
+    try {
+      const data = await readBody(req);
+      coworkPending = {
+        requestId: `req-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        goal: data.goal || "CLI-initiated session",
+        instructions: data.instructions || "",
+        queuedAt: new Date().toISOString(),
+      };
+      console.log(`[Cowork] Session queued by CLI: ${coworkPending.goal}`);
+      return json(res, { ok: true, requestId: coworkPending.requestId });
     } catch (err) {
       return json(res, { error: err.message }, 400);
     }
