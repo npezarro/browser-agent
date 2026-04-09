@@ -35,6 +35,7 @@
 #   errors [tabId]                Get network/console errors
 #   logs [since]                  Get agent logs
 #   health                        Server health check
+#   upload <selector> <filepath> [tabId] [--drag-drop]  Upload file to input
 #   ping [tabId]                  Ping browser agent
 #
 # Cowork commands:
@@ -260,6 +261,54 @@ case "$cmd" in
     curl -s "$API/health" | jq '.'
     ;;
 
+  upload)
+    # Upload a local file to a file input or drop zone in the browser
+    local_selector="${1:?selector required}"
+    local_filepath="${2:?filepath required}"
+    local_tab="${3:-$DEFAULT_TAB}"
+    local_dragdrop=false
+    # Check for --drag-drop flag in any position
+    for arg in "$@"; do
+      if [ "$arg" = "--drag-drop" ]; then local_dragdrop=true; fi
+    done
+
+    if [ ! -f "$local_filepath" ]; then
+      echo "ERROR: File not found: $local_filepath" >&2
+      exit 1
+    fi
+
+    local_filename=$(basename "$local_filepath")
+    local_mimetype=$(file -b --mime-type "$local_filepath" 2>/dev/null || echo "application/octet-stream")
+    local_b64=$(base64 -w 0 "$local_filepath")
+    local_blobid="blob-$(date +%s)-$(head -c 4 /dev/urandom | xxd -p)"
+
+    # Step 1: Upload blob to server
+    local_upload_body=$(jq -nc \
+      --arg bid "$local_blobid" \
+      --arg b64 "$local_b64" \
+      --arg fn "$local_filename" \
+      --arg mt "$local_mimetype" \
+      '{blobId: $bid, base64: $b64, filename: $fn, mimetype: $mt}')
+
+    local_upload_resp=$(curl -s -m 60 -X POST "$API/agent/upload-blob" \
+      -H "Content-Type: application/json" \
+      -H "$auth_header" \
+      -d "$local_upload_body")
+
+    local_upload_ok=$(echo "$local_upload_resp" | jq -r '.ok // false')
+    if [ "$local_upload_ok" != "true" ]; then
+      echo "ERROR: Failed to upload blob: $(echo "$local_upload_resp" | jq -r '.error // "unknown"')" >&2
+      exit 1
+    fi
+
+    # Step 2: Send uploadFile command to browser
+    interactive "$local_tab" "$(jq -nc \
+      --arg s "$local_selector" \
+      --arg bid "$local_blobid" \
+      --argjson dd "$local_dragdrop" \
+      '{action:"uploadFile", selector:$s, blobId:$bid, dragDrop:$dd}')" 45
+    ;;
+
   ping)
     interactive "${1:-$DEFAULT_TAB}" '{"action":"ping"}'
     ;;
@@ -268,6 +317,22 @@ case "$cmd" in
 
   cowork-status|cws)
     curl -s "$API/cowork/status" -H "$auth_header" | jq '.'
+    ;;
+
+  cowork-capture|cwcap)
+    # Run the PowerShell capture daemon (scrapes Cowork panel via CDP)
+    local_ps_path='\\wsl.localhost\Ubuntu\home\npezarro\repos\cowork-bridge\capture-daemon.ps1'
+    case "${1:-}" in
+      --watch|-w)
+        powershell.exe -ExecutionPolicy Bypass -File "$local_ps_path" -Watch -Interval "${2:-30}"
+        ;;
+      --targets|-t)
+        powershell.exe -ExecutionPolicy Bypass -File "$local_ps_path" -ListTargets
+        ;;
+      *)
+        powershell.exe -ExecutionPolicy Bypass -File "$local_ps_path"
+        ;;
+    esac
     ;;
 
   cowork-attach|cwa)
