@@ -35,6 +35,18 @@ let cmdIdCounter = 0;
 // Waiters for synchronous /interactive endpoint
 const resultWaiters = {};    // cmdId -> { resolve, timer }
 
+// ── Upload Blob Store ──
+const uploadBlobs = {};      // blobId -> { base64, filename, mimetype, ts }
+const BLOB_TTL = 300_000;    // 5 min
+
+function pruneBlobs() {
+  const now = Date.now();
+  for (const [id, b] of Object.entries(uploadBlobs)) {
+    if (now - b.ts > BLOB_TTL) delete uploadBlobs[id];
+  }
+}
+setInterval(pruneBlobs, 60_000);
+
 // ── Cowork State ──
 
 const COWORK_DIR = process.env.COWORK_SESSION_DIR || "/home/deployuser/cowork-sessions";
@@ -62,6 +74,20 @@ function readBody(req) {
     req.on("data", (c) => {
       body += c;
       if (body.length > 2e6) { req.destroy(); reject(new Error("too large")); }
+    });
+    req.on("end", () => {
+      try { resolve(JSON.parse(body)); }
+      catch (e) { reject(e); }
+    });
+  });
+}
+
+function readBodyLarge(req, maxBytes = 10e6) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", (c) => {
+      body += c;
+      if (body.length > maxBytes) { req.destroy(); reject(new Error("too large")); }
     });
     req.on("end", () => {
       try { resolve(JSON.parse(body)); }
@@ -385,6 +411,31 @@ const server = http.createServer(async (req, res) => {
       console.log(`[Result] cmd=${result.id} ok=${result.ok}`);
     } catch {}
     return json(res, { ok: true });
+  }
+
+  // ── Upload blob endpoints ──
+
+  // Store blob for TM script to fetch (auth required — called by CLI)
+  if (req.method === "POST" && path === "/agent/upload-blob") {
+    if (!checkAuth(req)) return json(res, { error: "Unauthorized" }, 401);
+    try {
+      const { blobId, base64, filename, mimetype } = await readBodyLarge(req);
+      if (!blobId || !base64) return json(res, { error: "blobId and base64 required" }, 400);
+      uploadBlobs[blobId] = { base64, filename: filename || "file", mimetype: mimetype || "application/octet-stream", ts: Date.now() };
+      pruneBlobs();
+      console.log(`[Upload] Stored blob ${blobId} (${(base64.length * 0.75 / 1024).toFixed(0)}KB, ${filename})`);
+      return json(res, { ok: true, blobId });
+    } catch (err) {
+      return json(res, { error: err.message }, 400);
+    }
+  }
+
+  // Serve blob to TM script (no auth — same as commands endpoint)
+  if (req.method === "GET" && path.startsWith("/agent/blob/")) {
+    const blobId = path.replace("/agent/blob/", "");
+    const blob = uploadBlobs[blobId];
+    if (!blob) return json(res, { error: "Blob not found or expired" }, 404);
+    return json(res, { ok: true, base64: blob.base64, filename: blob.filename, mimetype: blob.mimetype });
   }
 
   // ── Control endpoints (auth required — called by CLI) ──

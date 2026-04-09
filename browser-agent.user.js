@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Browser Agent (Generic)
 // @namespace    https://pezant.ca
-// @version      1.5.0
+// @version      1.6.0
 // @description  Generic remote browser agent. Polls server for commands, executes them, reports results. Works on all pages.
 // @author       npezarro
 // @match        *://*/*
@@ -25,7 +25,8 @@
   if (window.self !== window.top) return;
 
   const VERSION = GM_info.script.version;
-  const API = "https://pezant.ca/api/browser-agent/agent";
+  const API_BASE = "https://pezant.ca/api/browser-agent";
+  const API = API_BASE + "/agent";
   const POLL_MS = 3000;
   // Use sessionStorage for per-tab ID (survives SPA navigation, unique per tab)
   const stored = sessionStorage.getItem("_browserAgentTabId");
@@ -421,6 +422,55 @@
             result = { selected: true, value: selectEl.value };
           } else {
             result = { selected: false, error: selectEl ? "Not a select element" : "Element not found" };
+          }
+          break;
+        }
+
+        case "uploadFile": {
+          // Fetch blob from relay server, inject into file input or drop zone
+          const blobData = await new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+              method: "GET",
+              url: `${API_BASE}/agent/blob/${cmd.blobId}`,
+              onload: (resp) => {
+                if (resp.status !== 200) return reject(new Error(`Blob fetch failed: ${resp.status}`));
+                try { resolve(JSON.parse(resp.responseText)); }
+                catch (e) { reject(e); }
+              },
+              onerror: (err) => reject(new Error("Blob fetch error")),
+              ontimeout: () => reject(new Error("Blob fetch timeout")),
+              timeout: 30000,
+            });
+          });
+
+          if (!blobData.ok) throw new Error("Blob not found or expired");
+
+          // Decode base64 → File
+          const binaryStr = atob(blobData.base64);
+          const bytes = new Uint8Array(binaryStr.length);
+          for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+          const file = new File([bytes], blobData.filename, { type: blobData.mimetype });
+
+          const targetEl = document.querySelector(cmd.selector);
+          if (!targetEl) throw new Error(`Upload target not found: ${cmd.selector}`);
+
+          if (cmd.dragDrop) {
+            // Drag-and-drop mode for custom uploaders (e.g., FB)
+            const dt = new DataTransfer();
+            dt.items.add(file);
+            const dropEvent = new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt });
+            targetEl.dispatchEvent(new DragEvent("dragenter", { bubbles: true, dataTransfer: dt }));
+            targetEl.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: dt }));
+            targetEl.dispatchEvent(dropEvent);
+            result = { uploaded: true, mode: "dragDrop", filename: blobData.filename, size: bytes.length };
+          } else {
+            // Standard file input mode
+            const dt = new DataTransfer();
+            dt.items.add(file);
+            targetEl.files = dt.files;
+            targetEl.dispatchEvent(new Event("change", { bubbles: true }));
+            targetEl.dispatchEvent(new Event("input", { bubbles: true }));
+            result = { uploaded: true, mode: "fileInput", filename: blobData.filename, size: bytes.length };
           }
           break;
         }
