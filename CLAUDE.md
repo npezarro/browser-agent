@@ -67,6 +67,18 @@ The CLI supports multi-tab workflows beyond single-tab command execution:
 
 **Why this matters:** Agents running multi-step browser workflows (e.g., claim a game on one site, redeem a code on another) can now manage tab lifecycle without manual intervention. The `ensure` pattern prevents duplicate tabs when retrying failed flows.
 
+## File Upload (v1.6.0+)
+
+The CLI supports uploading local files to browser file inputs and drag-drop targets:
+
+- **`browser-cli upload <selector> <filepath> [tabId] [--drag-drop]`** — Base64-encodes a local file, stores it on the relay server as a temporary blob (5-min TTL, 10MB limit), then triggers the browser to inject it into the target element.
+- **Standard mode** (default) — Sets the file on an `<input type="file">` element and dispatches `change`/`input` events.
+- **Drag-drop mode** (`--drag-drop`) — Simulates `dragenter`/`dragover`/`drop` events on the target element for sites that use drag-drop upload UIs.
+
+**Server endpoints:** `POST /agent/upload-blob` (store), `GET /agent/blob/:id` (retrieve). Blobs auto-expire after 5 minutes.
+
+**Use case:** Automating image uploads (e.g., FB Marketplace listing photos) without manual intervention.
+
 ## install.html
 
 Version-controlled in this repo. Deploy script copies it to `/var/www/html/install.html`. When adding new TM scripts to the ecosystem, add them here.
