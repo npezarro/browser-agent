@@ -79,6 +79,11 @@ The CLI supports uploading local files to browser file inputs and drag-drop targ
 
 **Use case:** Automating image uploads (e.g., FB Marketplace listing photos) without manual intervention.
 
+## clickAny + Per-Command Timeout (v1.7.0+)
+
+- **`browser-cli click-any "text" [tabId]`** (alias `ca`) — Searches ALL visible elements for text match, not just buttons. Essential for custom React dropdowns that use plain `<div>`/`<span>` instead of `<button>`. Supports `exact` match, `excludeText` filter, and `scope` selector narrowing.
+- **Per-command timeout** — Each command has a 20s default timeout (configurable via `cmd.timeout`). Prevents queue poisoning when a command hangs (e.g., React re-render loop on `setInput`). Timed-out commands return `{ok: false, error: "Command execution timeout"}`.
+
 ## install.html
 
 Version-controlled in this repo. Deploy script copies it to `/var/www/html/install.html`. When adding new TM scripts to the ecosystem, add them here.
