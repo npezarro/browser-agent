@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Browser Agent (Generic)
 // @namespace    https://pezant.ca
-// @version      1.6.0
+// @version      1.6.1
 // @description  Generic remote browser agent. Polls server for commands, executes them, reports results. Works on all pages.
 // @author       npezarro
 // @match        *://*/*
@@ -309,12 +309,11 @@
           if (inputEl) {
             // Focus first for React-style apps
             inputEl.focus();
-            // Use native setter to bypass React's synthetic events
-            const nativeSet = Object.getOwnPropertyDescriptor(
-              window.HTMLInputElement.prototype, "value"
-            )?.set || Object.getOwnPropertyDescriptor(
-              window.HTMLTextAreaElement.prototype, "value"
-            )?.set;
+            // Use native setter matching the element type to avoid Illegal invocation
+            const proto = inputEl.tagName === "TEXTAREA"
+              ? window.HTMLTextAreaElement.prototype
+              : window.HTMLInputElement.prototype;
+            const nativeSet = Object.getOwnPropertyDescriptor(proto, "value")?.set;
             if (nativeSet) nativeSet.call(inputEl, cmd.value);
             else inputEl.value = cmd.value;
             inputEl.dispatchEvent(new Event("input", { bubbles: true }));
@@ -334,8 +333,11 @@
             for (const char of cmd.text) {
               typeEl.dispatchEvent(new KeyboardEvent("keydown", { key: char, bubbles: true }));
               typeEl.dispatchEvent(new KeyboardEvent("keypress", { key: char, bubbles: true }));
-              // Update value
-              const nSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+              // Update value — use correct prototype for the element type
+              const typeProto = typeEl.tagName === "TEXTAREA"
+                ? window.HTMLTextAreaElement.prototype
+                : window.HTMLInputElement.prototype;
+              const nSet = Object.getOwnPropertyDescriptor(typeProto, "value")?.set;
               if (nSet) nSet.call(typeEl, typeEl.value + char);
               else typeEl.value += char;
               typeEl.dispatchEvent(new Event("input", { bubbles: true }));

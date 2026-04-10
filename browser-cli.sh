@@ -279,21 +279,23 @@ case "$cmd" in
 
     local_filename=$(basename "$local_filepath")
     local_mimetype=$(file -b --mime-type "$local_filepath" 2>/dev/null || echo "application/octet-stream")
-    local_b64=$(base64 -w 0 "$local_filepath")
     local_blobid="blob-$(date +%s)-$(head -c 4 /dev/urandom | xxd -p)"
 
-    # Step 1: Upload blob to server
-    local_upload_body=$(jq -nc \
-      --arg bid "$local_blobid" \
-      --arg b64 "$local_b64" \
-      --arg fn "$local_filename" \
-      --arg mt "$local_mimetype" \
-      '{blobId: $bid, base64: $b64, filename: $fn, mimetype: $mt}')
+    # Step 1: Upload blob to server (write to temp file to avoid arg-too-long)
+    local_tmpfile=$(mktemp /tmp/browser-upload-XXXXXX.json)
+    trap "rm -f '$local_tmpfile'" EXIT
+    python3 -c "
+import base64, json, sys
+with open(sys.argv[1], 'rb') as f:
+    b64 = base64.b64encode(f.read()).decode()
+json.dump({'blobId': sys.argv[2], 'base64': b64, 'filename': sys.argv[3], 'mimetype': sys.argv[4]}, open(sys.argv[5], 'w'))
+" "$local_filepath" "$local_blobid" "$local_filename" "$local_mimetype" "$local_tmpfile"
 
     local_upload_resp=$(curl -s -m 60 -X POST "$API/agent/upload-blob" \
       -H "Content-Type: application/json" \
       -H "$auth_header" \
-      -d "$local_upload_body")
+      -d @"$local_tmpfile")
+    rm -f "$local_tmpfile"
 
     local_upload_ok=$(echo "$local_upload_resp" | jq -r '.ok // false')
     if [ "$local_upload_ok" != "true" ]; then
