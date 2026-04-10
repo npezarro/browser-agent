@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Browser Agent (Generic)
 // @namespace    https://pezant.ca
-// @version      1.7.0
+// @version      1.8.0
 // @description  Generic remote browser agent. Polls server for commands, executes them, reports results. Works on all pages.
 // @author       npezarro
 // @match        *://*/*
@@ -33,17 +33,31 @@
   const tabId = stored || `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
   if (!stored) sessionStorage.setItem("_browserAgentTabId", tabId);
 
-  // ── Console log capture ──
-  const consoleLogs = [];
+  // ── Console log capture (circular buffer — O(1) insert, no .shift()) ──
   const MAX_CONSOLE = 100;
+  const consoleLogs = new Array(MAX_CONSOLE);
+  let consoleHead = 0;
+  let consoleCount = 0;
   const origLog = console.log;
   const origWarn = console.warn;
   const origError = console.error;
 
   function captureConsole(level, args) {
     const msg = args.map((a) => typeof a === "object" ? JSON.stringify(a).substring(0, 300) : String(a)).join(" ");
-    consoleLogs.push({ level, msg, ts: Date.now() });
-    if (consoleLogs.length > MAX_CONSOLE) consoleLogs.shift();
+    consoleLogs[consoleHead] = { level, msg, ts: Date.now() };
+    consoleHead = (consoleHead + 1) % MAX_CONSOLE;
+    if (consoleCount < MAX_CONSOLE) consoleCount++;
+  }
+
+  function getConsoleLogs(count) {
+    count = Math.min(count || 50, consoleCount);
+    const result = [];
+    let idx = (consoleHead - count + MAX_CONSOLE) % MAX_CONSOLE;
+    for (let i = 0; i < count; i++) {
+      result.push(consoleLogs[idx]);
+      idx = (idx + 1) % MAX_CONSOLE;
+    }
+    return result;
   }
 
   console.log = function (...args) { origLog.apply(console, args); captureConsole("log", args); };
@@ -52,8 +66,7 @@
 
   // Capture unhandled errors
   window.addEventListener("error", (e) => {
-    consoleLogs.push({ level: "error", msg: `${e.message} at ${e.filename}:${e.lineno}`, ts: Date.now() });
-    if (consoleLogs.length > MAX_CONSOLE) consoleLogs.shift();
+    captureConsole("error", [`${e.message} at ${e.filename}:${e.lineno}`]);
   });
 
   // ── Logging ──
@@ -72,7 +85,19 @@
     });
   }
 
-  // ── Page introspection ──
+  // ── Page introspection (cached — expensive DOM traversal) ──
+
+  let cachedPageState = null;
+  let cachedPageStateAt = 0;
+  const PAGE_STATE_TTL = 2000; // ms — reuse cached result within this window
+
+  function getPageStateCached() {
+    const now = Date.now();
+    if (cachedPageState && now - cachedPageStateAt < PAGE_STATE_TTL) return cachedPageState;
+    cachedPageState = getPageState();
+    cachedPageStateAt = now;
+    return cachedPageState;
+  }
 
   function getPageState() {
     const buttons = [];
@@ -143,7 +168,7 @@
           break;
 
         case "getConsoleLog":
-          result = { logs: consoleLogs.slice(-(cmd.count || 50)) };
+          result = { logs: getConsoleLogs(cmd.count || 50) };
           break;
 
         case "getBodyText":
@@ -377,7 +402,7 @@
 
         case "getNetworkErrors": {
           // Return captured console errors (network errors show up in console)
-          result = { errors: consoleLogs.filter((l) => l.level === "error").slice(-20) };
+          result = { errors: getConsoleLogs(consoleCount).filter((l) => l.level === "error").slice(-20) };
           break;
         }
 
@@ -559,16 +584,21 @@
 
           for (const cmd of data.commands) {
             log(`Exec: ${cmd.action}${cmd.selector ? ` ${cmd.selector}` : ""}${cmd.text ? ` "${cmd.text}"` : ""}`);
-            // Per-command timeout to prevent queue poisoning
+            // Per-command timeout with cleanup to prevent timer accumulation
             const cmdTimeout = cmd.timeout || 20000;
             let result;
+            let timer;
             try {
               result = await Promise.race([
                 execCommand(cmd),
-                new Promise((_, reject) => setTimeout(() => reject(new Error("Command execution timeout")), cmdTimeout)),
+                new Promise((_, reject) => {
+                  timer = setTimeout(() => reject(new Error("Command execution timeout")), cmdTimeout);
+                }),
               ]);
             } catch (err) {
               result = { id: cmd.id, ok: false, error: err.message };
+            } finally {
+              if (timer) clearTimeout(timer);
             }
             if (result) post("/result", { tabId, ...result });
 
@@ -590,16 +620,20 @@
   log(`v${VERSION} loaded on ${window.location.hostname}`);
   post("/heartbeat", getPageState());
 
-  // Watch for SPA navigation
+  // Unified poll loop — handles both SPA navigation detection and command polling
+  // Single interval instead of two separate timers to reduce CPU pressure
   let lastUrl = window.location.href;
-  setInterval(() => {
+  function tick() {
+    // Check for SPA navigation
     if (window.location.href !== lastUrl) {
       lastUrl = window.location.href;
       log(`Navigate: ${lastUrl.substring(0, 120)}`);
-      post("/heartbeat", getPageState());
+      post("/heartbeat", getPageStateCached());
     }
-  }, 2000);
+    // Poll for commands
+    poll();
+  }
 
-  setInterval(poll, POLL_MS);
+  setInterval(tick, POLL_MS);
   setTimeout(poll, 800);
 })();
