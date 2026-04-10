@@ -93,6 +93,16 @@ The CLI supports uploading local files to browser file inputs and drag-drop targ
 - Newlines and double-quote chars in `setInput` values can cause timeouts on FB.
 - Category dropdowns: must click the SPAN leaf element, not the parent DIV container, for React to register the selection.
 
+## Nth-Match Click + SPA Wait (v1.9.0+)
+
+- **`browser-cli click "text" [tabId] --nth N`** — Click the Nth element matching text. Solves duplicate-text buttons (e.g., a page header and dialog footer both named "Create Key"). Default: `--nth 1` (first match).
+- **`browser-cli click-any "text" [tabId] --nth N`** — Same for clickAny.
+- **`browser-cli click "selector" [tabId] --nth N`** — Also works with CSS selectors via `querySelectorAll[N-1]`.
+- **`browser-cli wait-render [minLen] [timeout] [tabId]`** — Wait until `body.innerText` reaches `minLen` characters (default 50). Useful for SPAs that render empty then hydrate (e.g., Deepgram console). Default timeout 15s.
+- **Button deduplication removed** — `getPageState` no longer hides duplicate-text buttons. Each button now includes an `nth` field showing its occurrence number, so agents can see "Create Key (nth:1)" vs "Create Key (nth:2)".
+
+**CSP note:** Deepgram's console also blocks `eval`. Added to the list of CSP-restricted sites alongside Facebook and Google Photos.
+
 ## install.html
 
 Version-controlled in this repo. Deploy script copies it to `/var/www/html/install.html`. When adding new TM scripts to the ecosystem, add them here.
