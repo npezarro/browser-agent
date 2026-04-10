@@ -35,6 +35,7 @@
 #   errors [tabId]                Get network/console errors
 #   logs [since]                  Get agent logs
 #   health                        Server health check
+#   click-any <"text"> [tabId]       Click any element with matching text (wider than click)
 #   upload <selector> <filepath> [tabId] [--drag-drop]  Upload file to input
 #   ping [tabId]                  Ping browser agent
 #
@@ -259,6 +260,13 @@ case "$cmd" in
 
   health|h)
     curl -s "$API/health" | jq '.'
+    ;;
+
+  click-any|ca)
+    # Click any element with matching text (not just buttons — works for custom dropdowns)
+    local_text="${1:?text required}"
+    local_tab="${2:-$DEFAULT_TAB}"
+    interactive "$local_tab" "$(jq -nc --arg t "$local_text" '{action:"clickAny", text:$t}')"
     ;;
 
   upload)
