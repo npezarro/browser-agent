@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Browser Agent (Generic)
 // @namespace    https://pezant.ca
-// @version      1.6.1
+// @version      1.7.0
 // @description  Generic remote browser agent. Polls server for commands, executes them, reports results. Works on all pages.
 // @author       npezarro
 // @match        *://*/*
@@ -496,6 +496,34 @@
           result = { sent: true };
           break;
 
+        case "clickAny": {
+          // Click ANY visible element matching text — not just buttons
+          // Useful for custom React dropdowns that use plain divs/spans
+          const searchScope = cmd.scope || "*";
+          const searchText = cmd.text.toLowerCase();
+          let clickTarget = null;
+          for (const candidate of document.querySelectorAll(searchScope)) {
+            if (candidate.offsetParent === null && !candidate.closest("[role='listbox'], [role='menu'], [role='dialog']")) continue;
+            const t = (candidate.innerText || candidate.textContent || "").trim().toLowerCase();
+            if (t.length > 200) continue; // skip containers with too much text
+            const match = cmd.exact ? t === searchText : t === searchText || t.startsWith(searchText + "\n");
+            if (match) {
+              if (!cmd.excludeText || !cmd.excludeText.some((ex) => t.includes(ex.toLowerCase()))) {
+                clickTarget = candidate;
+                break;
+              }
+            }
+          }
+          if (clickTarget) {
+            clickTarget.scrollIntoView({ block: "center" });
+            clickTarget.click();
+            result = { clicked: true, text: (clickTarget.innerText || "").trim().substring(0, 80), tag: clickTarget.tagName };
+          } else {
+            result = { clicked: false, error: `No element with text "${cmd.text}" found` };
+          }
+          break;
+        }
+
         case "ping":
           result = { pong: true, url: window.location.href, version: VERSION, tabId };
           break;
@@ -531,7 +559,17 @@
 
           for (const cmd of data.commands) {
             log(`Exec: ${cmd.action}${cmd.selector ? ` ${cmd.selector}` : ""}${cmd.text ? ` "${cmd.text}"` : ""}`);
-            const result = await execCommand(cmd);
+            // Per-command timeout to prevent queue poisoning
+            const cmdTimeout = cmd.timeout || 20000;
+            let result;
+            try {
+              result = await Promise.race([
+                execCommand(cmd),
+                new Promise((_, reject) => setTimeout(() => reject(new Error("Command execution timeout")), cmdTimeout)),
+              ]);
+            } catch (err) {
+              result = { id: cmd.id, ok: false, error: err.message };
+            }
             if (result) post("/result", { tabId, ...result });
 
             if (data.commands.length > 1) {
