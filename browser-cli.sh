@@ -38,6 +38,10 @@
 #   click-any <"text"> [tabId]       Click any element with matching text (wider than click)
 #   upload <selector> <filepath> [tabId] [--drag-drop]  Upload file to input
 #   ping [tabId]                  Ping browser agent
+#   wait-render [minLen] [timeout] [tabId]  Wait for SPA body to hydrate
+#
+# Flags (append to click/click-any):
+#   --nth N                       Click the Nth match (default: 1st)
 #
 # Cowork commands:
 #   cowork-status                 Check if Cowork panel is active
@@ -127,12 +131,29 @@ case "$cmd" in
 
   click)
     local_target="${1:?text or selector required}"
-    local_tab="${2:-$DEFAULT_TAB}"
+    shift
+    local_tab="$DEFAULT_TAB"
+    local_nth=""
+    # Parse remaining args: [tabId] [--nth N]
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --nth) local_nth="${2:?--nth requires a number}"; shift 2 ;;
+        *) if [ -z "$local_tab" ] || [ "$local_tab" = "$DEFAULT_TAB" ]; then local_tab="$1"; fi; shift ;;
+      esac
+    done
     # If starts with . # or [ treat as selector, otherwise as text
     if [[ "$local_target" =~ ^[.#\[] ]]; then
-      interactive "$local_tab" "$(jq -nc --arg s "$local_target" '{action:"click", selector:$s}')"
+      if [ -n "$local_nth" ]; then
+        interactive "$local_tab" "$(jq -nc --arg s "$local_target" --argjson n "$local_nth" '{action:"click", selector:$s, nth:$n}')"
+      else
+        interactive "$local_tab" "$(jq -nc --arg s "$local_target" '{action:"click", selector:$s}')"
+      fi
     else
-      interactive "$local_tab" "$(jq -nc --arg t "$local_target" '{action:"click", text:$t}')"
+      if [ -n "$local_nth" ]; then
+        interactive "$local_tab" "$(jq -nc --arg t "$local_target" --argjson n "$local_nth" '{action:"click", text:$t, nth:$n}')"
+      else
+        interactive "$local_tab" "$(jq -nc --arg t "$local_target" '{action:"click", text:$t}')"
+      fi
     fi
     ;;
 
@@ -265,8 +286,20 @@ case "$cmd" in
   click-any|ca)
     # Click any element with matching text (not just buttons — works for custom dropdowns)
     local_text="${1:?text required}"
-    local_tab="${2:-$DEFAULT_TAB}"
-    interactive "$local_tab" "$(jq -nc --arg t "$local_text" '{action:"clickAny", text:$t}')"
+    shift
+    local_tab="$DEFAULT_TAB"
+    local_nth=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --nth) local_nth="${2:?--nth requires a number}"; shift 2 ;;
+        *) if [ -z "$local_tab" ] || [ "$local_tab" = "$DEFAULT_TAB" ]; then local_tab="$1"; fi; shift ;;
+      esac
+    done
+    if [ -n "$local_nth" ]; then
+      interactive "$local_tab" "$(jq -nc --arg t "$local_text" --argjson n "$local_nth" '{action:"clickAny", text:$t, nth:$n}')"
+    else
+      interactive "$local_tab" "$(jq -nc --arg t "$local_text" '{action:"clickAny", text:$t}')"
+    fi
     ;;
 
   upload)
@@ -317,6 +350,14 @@ json.dump({'blobId': sys.argv[2], 'base64': b64, 'filename': sys.argv[3], 'mimet
       --arg bid "$local_blobid" \
       --argjson dd "$local_dragdrop" \
       '{action:"uploadFile", selector:$s, blobId:$bid, dragDrop:$dd}')" 45
+    ;;
+
+  wait-render|wr)
+    # Wait for SPA to hydrate (body text reaches minLength characters)
+    local_minlen="${1:-50}"
+    local_timeout="${2:-15000}"
+    local_tab="${3:-$DEFAULT_TAB}"
+    interactive "$local_tab" "$(jq -nc --argjson m "$local_minlen" --argjson t "$local_timeout" '{action:"waitForRender", minLength:$m, timeout:$t}')" "$(( (local_timeout / 1000) + 5 ))"
     ;;
 
   ping)

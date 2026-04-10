@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Browser Agent (Generic)
 // @namespace    https://pezant.ca
-// @version      1.8.0
+// @version      1.9.0
 // @description  Generic remote browser agent. Polls server for commands, executes them, reports results. Works on all pages.
 // @author       npezarro
 // @match        *://*/*
@@ -24,7 +24,7 @@
   // Skip iframes — only run in top-level windows
   if (window.self !== window.top) return;
 
-  const VERSION = GM_info.script.version;
+  const VERSION = "1.9.0";
   const API_BASE = "https://pezant.ca/api/browser-agent";
   const API = API_BASE + "/agent";
   const POLL_MS = 3000;
@@ -101,13 +101,14 @@
 
   function getPageState() {
     const buttons = [];
-    const seen = new Set();
+    const textCount = {};
     for (const el of document.querySelectorAll("button, a[class*='button'], a[class*='btn'], a[role='button'], [role='button'], input[type='submit'], input[type='button']")) {
       const text = (el.innerText || el.value || "").trim().replace(/\s+/g, " ");
-      if (!text || text.length > 100 || seen.has(text)) continue;
-      seen.add(text);
+      if (!text || text.length > 100) continue;
+      textCount[text] = (textCount[text] || 0) + 1;
       buttons.push({
         text,
+        nth: textCount[text],
         tag: el.tagName,
         disabled: !!el.disabled || el.getAttribute("aria-disabled") === "true",
         visible: el.offsetParent !== null,
@@ -115,7 +116,7 @@
         href: el.href || null,
         id: el.id || null,
       });
-      if (buttons.length >= 50) break;
+      if (buttons.length >= 80) break;
     }
 
     const inputs = [];
@@ -209,16 +210,26 @@
         case "click": {
           let el;
           if (cmd.selector) {
-            el = document.querySelector(cmd.selector);
+            if (cmd.nth && cmd.nth > 1) {
+              const all = document.querySelectorAll(cmd.selector);
+              el = all[cmd.nth - 1] || null;
+            } else {
+              el = document.querySelector(cmd.selector);
+            }
           } else if (cmd.text) {
             const scope = cmd.scope || "button, a, input[type='submit'], input[type='button'], [role='button']";
             const lc = cmd.text.toLowerCase();
+            let matchNum = 0;
+            const targetNth = cmd.nth || 1;
             for (const candidate of document.querySelectorAll(scope)) {
               const t = (candidate.innerText || candidate.value || "").trim().toLowerCase();
               if (cmd.exact ? t === lc : t.includes(lc)) {
                 if (!cmd.excludeText || !cmd.excludeText.some((ex) => t.includes(ex.toLowerCase()))) {
-                  el = candidate;
-                  break;
+                  matchNum++;
+                  if (matchNum === targetNth) {
+                    el = candidate;
+                    break;
+                  }
                 }
               }
             }
@@ -523,19 +534,23 @@
 
         case "clickAny": {
           // Click ANY visible element matching text — not just buttons
-          // Useful for custom React dropdowns that use plain divs/spans
           const searchScope = cmd.scope || "*";
           const searchText = cmd.text.toLowerCase();
           let clickTarget = null;
+          let matchNum = 0;
+          const targetNth = cmd.nth || 1;
           for (const candidate of document.querySelectorAll(searchScope)) {
             if (candidate.offsetParent === null && !candidate.closest("[role='listbox'], [role='menu'], [role='dialog']")) continue;
             const t = (candidate.innerText || candidate.textContent || "").trim().toLowerCase();
-            if (t.length > 200) continue; // skip containers with too much text
+            if (t.length > 200) continue;
             const match = cmd.exact ? t === searchText : t === searchText || t.startsWith(searchText + "\n");
             if (match) {
               if (!cmd.excludeText || !cmd.excludeText.some((ex) => t.includes(ex.toLowerCase()))) {
-                clickTarget = candidate;
-                break;
+                matchNum++;
+                if (matchNum === targetNth) {
+                  clickTarget = candidate;
+                  break;
+                }
               }
             }
           }
@@ -546,6 +561,21 @@
           } else {
             result = { clicked: false, error: `No element with text "${cmd.text}" found` };
           }
+          break;
+        }
+
+        case "waitForRender": {
+          // Wait for SPA to hydrate — body text exceeds minLength
+          const minLen = cmd.minLength || 50;
+          const timeout = cmd.timeout || 15000;
+          const start = Date.now();
+          let bodyLen = 0;
+          while (Date.now() - start < timeout) {
+            bodyLen = (document.body?.innerText || "").length;
+            if (bodyLen >= minLen) break;
+            await new Promise((r) => setTimeout(r, 300));
+          }
+          result = { rendered: bodyLen >= minLen, bodyLength: bodyLen, elapsed: Date.now() - start };
           break;
         }
 
