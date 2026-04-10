@@ -79,6 +79,20 @@ The CLI supports uploading local files to browser file inputs and drag-drop targ
 
 **Use case:** Automating image uploads (e.g., FB Marketplace listing photos) without manual intervention.
 
+## clickAny + Per-Command Timeout (v1.7.0+)
+
+- **`browser-cli click-any <"text"> [tabId]`** — Searches ALL visible elements for matching text (not just buttons/links). Essential for custom React dropdowns (e.g., FB Marketplace category/condition) that render options as plain `<div>` or `<span>` elements.
+- Via API, supports `scope` parameter to narrow search (e.g., `"span, a, [role=option]"`) and `exact: true` for exact text matching.
+
+**Per-command timeout:** Each command has a 20s execution timeout via `Promise.race` in the poll loop. If a command hangs (e.g., `setInput` triggering an infinite React re-render), it fails gracefully instead of poisoning the entire command queue for that tab.
+
+**CSP limitations:** Both Facebook and Google Photos block `eval`/`new Function()` via Content Security Policy. All automation must use built-in commands — no arbitrary JS execution on these sites.
+
+**React gotchas:**
+- `setInput` uses native value setters which bypass React's `onChange` — breaks autocomplete fields. Use `type` for searchable inputs.
+- Newlines and double-quote chars in `setInput` values can cause timeouts on FB.
+- Category dropdowns: must click the SPAN leaf element, not the parent DIV container, for React to register the selection.
+
 ## install.html
 
 Version-controlled in this repo. Deploy script copies it to `/var/www/html/install.html`. When adding new TM scripts to the ecosystem, add them here.
