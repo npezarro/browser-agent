@@ -47,6 +47,43 @@ function pruneBlobs() {
 }
 setInterval(pruneBlobs, 60_000);
 
+// ── Periodic cleanup for leaked state ──
+
+const WAITER_TTL = 600_000;     // 10 min — max time a resultWaiter can live
+const CMD_QUEUE_TTL = 120_000;  // 2 min — prune commands for dead tabs
+
+function pruneResultWaiters() {
+  const now = Date.now();
+  for (const [id, w] of Object.entries(resultWaiters)) {
+    // Waiters have a timer that fires at most 60s, but if something goes wrong
+    // and the timer doesn't fire, clean up after 10 min
+    if (w.createdAt && now - w.createdAt > WAITER_TTL) {
+      clearTimeout(w.timer);
+      delete resultWaiters[id];
+      console.log(`[Cleanup] Expired stale resultWaiter: ${id}`);
+    }
+  }
+}
+
+function pruneCommandQueues() {
+  pruneTabs();
+  const liveTabIds = new Set(Object.keys(agentTabs));
+  liveTabIds.add("all"); // "all" is a broadcast target, always valid
+  for (const tabId of Object.keys(agentCommands)) {
+    if (!liveTabIds.has(tabId) && agentCommands[tabId].length > 0) {
+      console.log(`[Cleanup] Dropped ${agentCommands[tabId].length} orphaned commands for dead tab ${tabId.substring(0, 8)}`);
+      delete agentCommands[tabId];
+    }
+  }
+}
+
+// Run cleanup every 30 seconds
+setInterval(() => {
+  pruneTabs();
+  pruneResultWaiters();
+  pruneCommandQueues();
+}, 30_000);
+
 // ── Cowork State ──
 
 const COWORK_DIR = process.env.COWORK_SESSION_DIR || "/home/generatedByTermius/cowork-sessions";
@@ -512,7 +549,7 @@ const server = http.createServer(async (req, res) => {
           delete resultWaiters[cmd.id];
           resolve({ id: cmd.id, ok: false, error: "Timeout waiting for browser response", timedOut: true });
         }, timeoutMs);
-        resultWaiters[cmd.id] = { resolve, timer };
+        resultWaiters[cmd.id] = { resolve, timer, createdAt: Date.now() };
       });
 
       return json(res, result);
