@@ -103,6 +103,25 @@ The CLI supports uploading local files to browser file inputs and drag-drop targ
 
 **CSP note:** Deepgram's console also blocks `eval`. Added to the list of CSP-restricted sites alongside Facebook and Google Photos.
 
+## Companion Extension (v2.0.0+)
+
+A Manifest V3 Edge/Chrome extension (`extension/`) that provides capabilities unavailable to Tampermonkey:
+
+- **Background tab creation** — `chrome.tabs.create({active: false})` — no focus stealing
+- **Tab focus management** — `chrome.tabs.update` + `chrome.windows.update`
+- **Direct tab queries** — `chrome.tabs.query()` without heartbeat polling
+
+**Architecture**: Extension polls `/ext/commands` on the relay server (2s interval). Server routes tab-management commands (`openTab`, `openTabBackground`, `closeTab`, `focusTab`, `queryTabs`) to extension when connected, falls back to TM script when not.
+
+**Graceful degradation**: TM script handles `openTabBackground` as regular `openTab` (focus-stealing) when extension is absent. All existing functionality works without the extension.
+
+**CLI commands**:
+- `browser-cli open --bg <url>` — Open tab in background (extension)
+- `browser-cli focus <url>` — Focus existing tab by URL (extension)
+- `browser-cli ext-status` — Check extension connection status
+
+**Install**: Load `extension/` as unpacked extension in Edge, configure API URL and key in popup.
+
 ## install.html
 
 Version-controlled in this repo. Deploy script copies it to `/var/www/html/install.html`. When adding new TM scripts to the ecosystem, add them here.

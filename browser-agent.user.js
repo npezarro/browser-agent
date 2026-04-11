@@ -252,8 +252,11 @@
           return null; // signal: already posted
 
         case "openTab":
+        case "openTabBackground":
+          // openTabBackground is handled by the companion extension when available.
+          // If it reaches the TM script, extension isn't connected — fall back to window.open.
           window.open(cmd.url, "_blank");
-          result = { opened: true, url: cmd.url };
+          result = { opened: true, url: cmd.url, background: false };
           break;
 
         case "closeTab":
