@@ -193,6 +193,27 @@ case "$cmd" in
     curl -s "$API/ext/status" -H "$auth_header" | jq .
     ;;
 
+  screenshot|capture)
+    # Capture visible tab as PNG. Saves to file.
+    # Usage: browser-cli screenshot [output_path] [url_to_focus]
+    local_output="${1:-/tmp/screenshot-$(date +%s).png}"
+    local_focus_url="${2:-}"
+    local_capture_args='{action:"captureTab"}'
+    if [ -n "$local_focus_url" ]; then
+      local_capture_args=$(jq -nc --arg u "$local_focus_url" '{action:"captureTab", url:$u}')
+    fi
+    result=$(interactive "" "$local_capture_args")
+    dataUrl=$(echo "$result" | jq -r '.result.dataUrl // .dataUrl // empty')
+    if [ -z "$dataUrl" ]; then
+      echo "ERROR: No screenshot data returned" >&2
+      echo "$result" >&2
+      exit 1
+    fi
+    # Strip data:image/png;base64, prefix and decode
+    echo "$dataUrl" | sed 's/^data:image\/[a-z]*;base64,//' | base64 -d > "$local_output"
+    echo "{\"saved\":\"$local_output\",\"size\":$(stat -c%s "$local_output" 2>/dev/null || stat -f%z "$local_output" 2>/dev/null)}"
+    ;;
+
   ensure)
     # Open URL in a tab if no existing tab matches. Returns the tabId.
     # Usage: browser-cli ensure <url> [wait_seconds]
