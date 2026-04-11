@@ -120,6 +120,9 @@ A Manifest V3 Edge/Chrome extension (`extension/`) that provides capabilities un
 - `browser-cli focus <url>` — Focus existing tab by URL (extension)
 - `browser-cli ext-status` — Check extension connection status
 
+**Screenshot capture (v1.1.0)**:
+- `browser-cli screenshot [output_path] [url_to_focus]` — Captures PNG screenshot via `chrome.tabs.captureVisibleTab()`. Routed through relay server like other extension commands. Optional `url_to_focus` focuses a tab before capture.
+
 **Install**: Load `extension/` as unpacked extension in Edge, configure API URL and key in popup.
 
 ## install.html
