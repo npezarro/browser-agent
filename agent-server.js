@@ -40,7 +40,7 @@ let extConnected = false;
 let extLastHeartbeat = 0;
 const EXT_TTL = 30_000;      // 30s — extension heartbeat timeout
 const extCommands = [];       // queued commands for extension
-const EXT_TAB_ACTIONS = new Set(["openTab", "openTabBackground", "closeTab", "focusTab", "queryTabs", "createTab"]);
+const EXT_TAB_ACTIONS = new Set(["openTab", "openTabBackground", "closeTab", "focusTab", "queryTabs", "createTab", "captureTab"]);
 
 // ── Upload Blob Store ──
 const uploadBlobs = {};      // blobId -> { base64, filename, mimetype, ts }

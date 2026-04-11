@@ -101,6 +101,9 @@ async function executeCommand(cmd) {
       case "createTab":
         result = await cmdOpenTab(cmd);
         break;
+      case "captureTab":
+        result = await cmdCaptureTab(cmd);
+        break;
       default:
         result = { error: `Unknown extension command: ${cmd.action}` };
     }
@@ -172,6 +175,43 @@ async function cmdQueryTabs(cmd) {
       windowId: t.windowId,
     })),
   };
+}
+
+async function cmdCaptureTab(cmd) {
+  // Find the tab to capture — by chromeTabId or URL, or use the active tab
+  let tabId = cmd.chromeTabId;
+  let windowId;
+  if (!tabId && cmd.url) {
+    const tabs = await chrome.tabs.query({});
+    const match = tabs.find((t) => t.url && t.url.startsWith(cmd.url));
+    if (match) {
+      tabId = match.id;
+      windowId = match.windowId;
+    }
+  }
+  if (!tabId) {
+    // Fallback: capture active tab in current window
+    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (active) {
+      tabId = active.id;
+      windowId = active.windowId;
+    }
+  }
+  if (!tabId) return { error: "No tab found to capture" };
+
+  // Focus the tab first so captureVisibleTab captures the right content
+  if (windowId) {
+    await chrome.tabs.update(tabId, { active: true });
+    await chrome.windows.update(windowId, { focused: true });
+    // Brief delay for render
+    await new Promise((r) => setTimeout(r, 500));
+  }
+
+  const dataUrl = await chrome.tabs.captureVisibleTab(windowId, {
+    format: cmd.format || "png",
+    quality: cmd.quality || 90,
+  });
+  return { dataUrl, chromeTabId: tabId };
 }
 
 // --- Badge ---
