@@ -12,7 +12,10 @@
 #   click <"text"|selector> [tabId]  Click a button/link
 #   navigate <url> [tabId]        Navigate current tab to URL
 #   open <url> [tabId]            Open URL in new tab
+#   open --bg <url>              Open URL in background tab (extension required)
 #   close [tabId]                 Close tab
+#   focus <url>                   Focus tab by URL (extension required)
+#   ext-status                    Check companion extension connection
 #   ensure <url> [wait_s]         Reuse or open tab for URL, return tabId
 #   back [tabId]                  Go back
 #   reload [tabId]                Reload page
@@ -162,11 +165,32 @@ case "$cmd" in
     ;;
 
   open|open-tab)
-    interactive "${2:-$DEFAULT_TAB}" "$(jq -nc --arg u "${1:?url required}" '{action:"openTab", url:$u}')"
+    local_open_url="${1:?url required}"
+    local_open_tab="${2:-$DEFAULT_TAB}"
+    # --bg or --background flag opens tab without stealing focus (requires extension)
+    if [[ "$1" == "--bg" || "$1" == "--background" ]]; then
+      local_open_url="${2:?url required}"
+      local_open_tab="${3:-$DEFAULT_TAB}"
+      interactive "$local_open_tab" "$(jq -nc --arg u "$local_open_url" '{action:"openTabBackground", url:$u}')"
+    elif [[ "$2" == "--bg" || "$2" == "--background" ]]; then
+      interactive "$local_open_tab" "$(jq -nc --arg u "$local_open_url" '{action:"openTabBackground", url:$u}')"
+    else
+      interactive "$local_open_tab" "$(jq -nc --arg u "$local_open_url" '{action:"openTab", url:$u}')"
+    fi
     ;;
 
   close|close-tab)
     interactive "${1:-$DEFAULT_TAB}" '{"action":"closeTab"}'
+    ;;
+
+  focus)
+    # Focus a tab by URL (requires extension)
+    interactive "" "$(jq -nc --arg u "${1:?url required}" '{action:"focusTab", url:$u}')"
+    ;;
+
+  ext-status)
+    # Check if companion extension is connected
+    curl -s "$API/ext/status" -H "$auth_header" | jq .
     ;;
 
   ensure)
@@ -180,8 +204,8 @@ case "$cmd" in
     if [ -n "$existing" ]; then
       echo "{\"tabId\":\"$existing\",\"action\":\"reused\",\"url\":\"$local_url\"}"
     else
-      # Open new tab from the most recent existing tab
-      interactive "" "$(jq -nc --arg u "$local_url" '{action:"openTab", url:$u}')" > /dev/null 2>&1
+      # Open new tab (uses extension for background open if available, falls back to TM)
+      interactive "" "$(jq -nc --arg u "$local_url" '{action:"openTabBackground", url:$u}')" > /dev/null 2>&1
       # Wait for the new tab to register
       for i in $(seq 1 "$local_wait"); do
         sleep 1

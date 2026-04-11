@@ -35,6 +35,13 @@ let cmdIdCounter = 0;
 // Waiters for synchronous /interactive endpoint
 const resultWaiters = {};    // cmdId -> { resolve, timer }
 
+// ── Extension State ──
+let extConnected = false;
+let extLastHeartbeat = 0;
+const EXT_TTL = 30_000;      // 30s — extension heartbeat timeout
+const extCommands = [];       // queued commands for extension
+const EXT_TAB_ACTIONS = new Set(["openTab", "openTabBackground", "closeTab", "focusTab", "queryTabs", "createTab"]);
+
 // ── Upload Blob Store ──
 const uploadBlobs = {};      // blobId -> { base64, filename, mimetype, ts }
 const BLOB_TTL = 300_000;    // 5 min
@@ -526,7 +533,29 @@ const server = http.createServer(async (req, res) => {
       const { tabId: tid, command, timeout } = await readBody(req);
       const timeoutMs = Math.min(timeout || 30000, 60000);
 
-      // Pick target tab
+      // Check if this is a tab-management command and extension is connected
+      const extAlive = Date.now() - extLastHeartbeat < EXT_TTL;
+      const isTabCmd = EXT_TAB_ACTIONS.has(command.action);
+
+      if (isTabCmd && extAlive) {
+        // Route to extension instead of TM script
+        const cmd = { ...command };
+        cmd.id = `cmd-${++cmdIdCounter}`;
+        extCommands.push(cmd);
+        console.log(`[Ext Route] ${cmd.action} → extension (cmd=${cmd.id})`);
+
+        const result = await new Promise((resolve) => {
+          const timer = setTimeout(() => {
+            delete resultWaiters[cmd.id];
+            resolve({ id: cmd.id, ok: false, error: "Timeout waiting for extension response", timedOut: true });
+          }, timeoutMs);
+          resultWaiters[cmd.id] = { resolve, timer, createdAt: Date.now() };
+        });
+
+        return json(res, result);
+      }
+
+      // Pick target tab (standard TM script routing)
       pruneTabs();
       let target = tid;
       if (!target) {
@@ -556,6 +585,41 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       return json(res, { error: err.message }, 400);
     }
+  }
+
+  // ── Extension endpoints (auth required) ──
+
+  if (req.method === "POST" && path === "/ext/heartbeat") {
+    if (!checkAuth(req)) return json(res, { error: "Unauthorized" }, 401);
+    try {
+      const state = await readBody(req);
+      extConnected = true;
+      extLastHeartbeat = Date.now();
+      console.log(`[Ext] Heartbeat — tabs: ${state.tabCount || "?"}`);
+    } catch {}
+    return json(res, { ok: true });
+  }
+
+  if (req.method === "GET" && path === "/ext/commands") {
+    if (!checkAuth(req)) return json(res, { error: "Unauthorized" }, 401);
+    const cmds = extCommands.splice(0, extCommands.length);
+    return json(res, { commands: cmds });
+  }
+
+  if (req.method === "POST" && path === "/ext/result") {
+    if (!checkAuth(req)) return json(res, { error: "Unauthorized" }, 401);
+    try {
+      const result = await readBody(req);
+      pushResult(result);
+      console.log(`[Ext Result] cmd=${result.id} ok=${result.ok}`);
+    } catch {}
+    return json(res, { ok: true });
+  }
+
+  if (req.method === "GET" && path === "/ext/status") {
+    if (!checkAuth(req)) return json(res, { error: "Unauthorized" }, 401);
+    const alive = Date.now() - extLastHeartbeat < EXT_TTL;
+    return json(res, { connected: alive, lastHeartbeat: extLastHeartbeat });
   }
 
   // ── Cowork endpoints (no auth — called by Chrome extension) ──
