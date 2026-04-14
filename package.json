@@ -5,7 +5,8 @@
   "main": "agent-server.js",
   "scripts": {
     "start": "node agent-server.js",
-    "deploy": "bash deploy.sh"
+    "deploy": "bash deploy.sh",
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5"
