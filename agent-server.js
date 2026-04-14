@@ -10,6 +10,19 @@
  */
 require("dotenv").config();
 const http = require("http");
+const {
+  snapshotToMarkdown,
+  buildDiscordPayload,
+  buildLogEntry,
+  pickMostRecentTab,
+  pruneByAge,
+  pushResult: pushResultCore,
+  pruneCommandQueues: pruneCommandQueuesCore,
+  appendLog,
+  pruneBlobs: pruneBlobsCore,
+  buildSessionSummary,
+  shouldRouteToExtension,
+} = require("./lib/core");
 
 const PORT = process.env.BROWSER_AGENT_PORT || 3102;
 const API_KEY = process.env.BROWSER_AGENT_KEY;
@@ -47,10 +60,7 @@ const uploadBlobs = {};      // blobId -> { base64, filename, mimetype, ts }
 const BLOB_TTL = 300_000;    // 5 min
 
 function pruneBlobs() {
-  const now = Date.now();
-  for (const [id, b] of Object.entries(uploadBlobs)) {
-    if (now - b.ts > BLOB_TTL) delete uploadBlobs[id];
-  }
+  pruneBlobsCore(uploadBlobs, BLOB_TTL);
 }
 setInterval(pruneBlobs, 60_000);
 
@@ -74,13 +84,9 @@ function pruneResultWaiters() {
 
 function pruneCommandQueues() {
   pruneTabs();
-  const liveTabIds = new Set(Object.keys(agentTabs));
-  liveTabIds.add("all"); // "all" is a broadcast target, always valid
-  for (const tabId of Object.keys(agentCommands)) {
-    if (!liveTabIds.has(tabId) && agentCommands[tabId].length > 0) {
-      console.log(`[Cleanup] Dropped ${agentCommands[tabId].length} orphaned commands for dead tab ${tabId.substring(0, 8)}`);
-      delete agentCommands[tabId];
-    }
+  const dropped = pruneCommandQueuesCore(agentCommands, Object.keys(agentTabs));
+  for (const [tabId, count] of Object.entries(dropped)) {
+    console.log(`[Cleanup] Dropped ${count} orphaned commands for dead tab ${tabId.substring(0, 8)}`);
   }
 }
 
@@ -150,24 +156,11 @@ function json(res, data, status = 200) {
 }
 
 function pruneTabs() {
-  const now = Date.now();
-  for (const [id, s] of Object.entries(agentTabs)) {
-    if (now - s.receivedAt > TAB_TTL) delete agentTabs[id];
-  }
+  pruneByAge(agentTabs, TAB_TTL, "receivedAt");
 }
 
 function pushResult(result) {
-  result.ts = Date.now();
-  agentResults.push(result);
-  if (agentResults.length > MAX_RESULTS) agentResults.shift();
-
-  // Wake any synchronous waiter
-  const waiter = resultWaiters[result.id];
-  if (waiter) {
-    clearTimeout(waiter.timer);
-    delete resultWaiters[result.id];
-    waiter.resolve(result);
-  }
+  pushResultCore(result, agentResults, MAX_RESULTS, resultWaiters);
 }
 
 // ── Cowork Persistence ──
@@ -210,39 +203,7 @@ function persistCoworkMarkdown(sessionId) {
   }
 }
 
-function snapshotToMarkdown(sessionId, session) {
-  const started = session.startedAt
-    ? new Date(session.startedAt).toISOString().replace("T", " ").slice(0, 16)
-    : "unknown";
-
-  let md = `# Session: ${session.slug || sessionId}\n`;
-  md += `- **Started**: ${started}\n`;
-  md += `- **Goal**: ${session.goal || "Cowork session"}\n`;
-  md += `- **Status**: ${session.status || "unknown"}\n`;
-  if (session.model) md += `- **Model**: ${session.model}\n`;
-  md += `- **Source**: cowork-bridge (auto-captured)\n\n`;
-
-  md += `## Turns\n\n`;
-
-  let turnNum = 0;
-  for (const turn of session.turns) {
-    turnNum++;
-    const time = turn.ts
-      ? new Date(turn.ts).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })
-      : "--:--";
-
-    md += `### Turn ${turnNum} — ${time}\n`;
-    md += `**${turn.role === "human" ? "User" : "Assistant"}**: ${turn.content.slice(0, 2000)}\n\n`;
-  }
-
-  if (session.status === "completed" || session.status === "interrupted") {
-    md += `## Final Summary\n`;
-    md += `Session ${session.status} with ${session.turns.length} turns. `;
-    md += `Reason: ${session.reason || "normal end"}.\n`;
-  }
-
-  return md;
-}
+// snapshotToMarkdown — imported from lib/core.js
 
 // ── Cowork Discord Posting ──
 
@@ -252,37 +213,9 @@ function postToDiscord(session) {
     return;
   }
 
-  const turnCount = session.turns?.length || 0;
-  const status = session.status || "completed";
-  const color = status === "completed" ? 3066993 : status === "interrupted" ? 15105570 : 3447003;
-  const model = session.model || "";
-
-  // Build turn summary (last 3 turns, truncated)
-  const recentTurns = (session.turns || []).slice(-3).map((t) => {
-    const role = t.role === "human" ? "**User**" : "**Claude**";
-    const text = t.content.slice(0, 200).replace(/\n/g, " ");
-    return `${role}: ${text}${t.content.length > 200 ? "..." : ""}`;
-  }).join("\n");
-
-  const description = [
-    `**Turns:** ${turnCount}`,
-    model ? `**Model:** ${model}` : "",
-    `**Status:** ${status}`,
-    session.reason ? `**Reason:** ${session.reason}` : "",
-    "",
-    recentTurns || "(no turns captured)",
-  ].filter(Boolean).join("\n").slice(0, 3900);
-
-  const payload = JSON.stringify({
-    username: "Cowork Bridge",
-    embeds: [{
-      title: `Cowork: ${session.slug || "session"}`,
-      description,
-      color,
-      timestamp: new Date().toISOString(),
-      footer: { text: "Cowork Bridge (auto-captured)" },
-    }],
-  });
+  const embed = buildDiscordPayload(session);
+  embed.embeds[0].timestamp = new Date().toISOString();
+  const payload = JSON.stringify(embed);
 
   const url = new URL(`${COWORK_WEBHOOK}?wait=true`);
   const options = {
@@ -425,9 +358,8 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && path === "/agent/log") {
     try {
       const { tabId, msg, ts } = await readBody(req);
-      const entry = `[${new Date(ts || Date.now()).toISOString()}] [${(tabId || "?").substring(0, 8)}] ${msg}`;
-      remoteLogs.push(entry);
-      if (remoteLogs.length > MAX_LOGS) remoteLogs.shift();
+      const entry = buildLogEntry(tabId, msg, ts);
+      appendLog(remoteLogs, entry, MAX_LOGS);
       console.log(`[Agent] ${msg}`);
     } catch {}
     return json(res, { ok: true });
@@ -534,10 +466,7 @@ const server = http.createServer(async (req, res) => {
       const timeoutMs = Math.min(timeout || 30000, 60000);
 
       // Check if this is a tab-management command and extension is connected
-      const extAlive = Date.now() - extLastHeartbeat < EXT_TTL;
-      const isTabCmd = EXT_TAB_ACTIONS.has(command.action);
-
-      if (isTabCmd && extAlive) {
+      if (shouldRouteToExtension(command.action, extLastHeartbeat, EXT_TTL)) {
         // Route to extension instead of TM script
         const cmd = { ...command };
         cmd.id = `cmd-${++cmdIdCounter}`;
@@ -559,11 +488,8 @@ const server = http.createServer(async (req, res) => {
       pruneTabs();
       let target = tid;
       if (!target) {
-        const tabIds = Object.keys(agentTabs);
-        if (tabIds.length === 0) return json(res, { error: "No browser tabs connected" }, 503);
-        // Pick the most recently active tab
-        tabIds.sort((a, b) => (agentTabs[b].receivedAt || 0) - (agentTabs[a].receivedAt || 0));
-        target = tabIds[0];
+        target = pickMostRecentTab(agentTabs);
+        if (!target) return json(res, { error: "No browser tabs connected" }, 503);
       }
 
       // Assign ID and queue
@@ -776,17 +702,7 @@ const server = http.createServer(async (req, res) => {
 
   // Summary — unauthenticated, lightweight session list for the popup
   if (req.method === "GET" && path === "/cowork/summary") {
-    const sessions = Object.entries(coworkSessions)
-      .map(([id, s]) => ({
-        id,
-        slug: s.slug,
-        goal: s.goal,
-        status: s.status,
-        turnCount: s.turnCount || 0,
-        startedAt: s.startedAt,
-      }))
-      .sort((a, b) => (b.startedAt || "").localeCompare(a.startedAt || ""))
-      .slice(0, 10);
+    const sessions = buildSessionSummary(coworkSessions, 10);
     return json(res, { sessions, count: sessions.length });
   }
 
