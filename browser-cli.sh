@@ -198,7 +198,7 @@ case "$cmd" in
     # Usage: browser-cli screenshot [output_path] [url_to_focus]
     local_output="${1:-/tmp/screenshot-$(date +%s).png}"
     local_focus_url="${2:-}"
-    local_capture_args='{action:"captureTab"}'
+    local_capture_args='{"action":"captureTab"}'
     if [ -n "$local_focus_url" ]; then
       local_capture_args=$(jq -nc --arg u "$local_focus_url" '{action:"captureTab", url:$u}')
     fi
