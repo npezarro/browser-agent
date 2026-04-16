@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Browser Agent (Generic)
 // @namespace    https://pezant.ca
-// @version      1.12.0
+// @version      1.13.0
 // @description  Generic remote browser agent. Polls server for commands, executes them, reports results. Works on all pages.
 // @author       npezarro
 // @match        *://*/*
@@ -24,7 +24,7 @@
   // Skip iframes — only run in top-level windows
   if (window.self !== window.top) return;
 
-  const VERSION = "1.12.0";
+  const VERSION = "1.13.0";
   const API_BASE = "https://pezant.ca/api/browser-agent";
   const API = API_BASE + "/agent";
   const POLL_MS = 3000;
@@ -640,6 +640,26 @@
 
           commandActive = true;
           for (const cmd of data.commands) {
+            // If user is actively interacting, wait until they stop before executing
+            // This prevents DOM commands from competing with user input
+            if (isUserActive()) {
+              log(`Deferring: ${cmd.action} (user active)`);
+              await new Promise((resolve) => {
+                const check = () => isUserActive() ? setTimeout(check, 1000) : resolve();
+                check();
+              });
+            }
+
+            // Yield to browser event loop before each command via requestIdleCallback
+            // This lets the browser process rendering/input between our DOM operations
+            await new Promise((resolve) => {
+              if (typeof requestIdleCallback === "function") {
+                requestIdleCallback(resolve, { timeout: 2000 });
+              } else {
+                setTimeout(resolve, 50);
+              }
+            });
+
             log(`Exec: ${cmd.action}${cmd.selector ? ` ${cmd.selector}` : ""}${cmd.text ? ` "${cmd.text}"` : ""}`);
             // Per-command timeout with cleanup to prevent timer accumulation
             const cmdTimeout = cmd.timeout || 20000;
@@ -659,9 +679,8 @@
             }
             if (result) post("/result", { tabId, ...result });
 
-            if (data.commands.length > 1) {
-              await new Promise((r) => setTimeout(r, 300));
-            }
+            // Breathing room between commands
+            await new Promise((r) => setTimeout(r, 300));
           }
         } catch (err) {
           origError("[BrowserAgent] Poll error:", err);
