@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Browser Agent (Generic)
 // @namespace    https://pezant.ca
-// @version      1.10.0
+// @version      1.11.0
 // @description  Generic remote browser agent. Polls server for commands, executes them, reports results. Works on all pages.
 // @author       npezarro
 // @match        *://*/*
@@ -24,23 +24,30 @@
   // Skip iframes — only run in top-level windows
   if (window.self !== window.top) return;
 
-  const VERSION = "1.10.0";
+  const VERSION = "1.11.0";
   const API_BASE = "https://pezant.ca/api/browser-agent";
   const API = API_BASE + "/agent";
   const POLL_MS = 3000;
-  const POLL_MS_THROTTLED = 10000; // Slower polling when user has focus (prevents Edge hangs)
+  const USER_IDLE_MS = 5000; // Resume polling after 5s of no user activity
 
-  // ── User focus detection — throttle polling when user is actively browsing ──
-  let userHasFocus = document.hasFocus();
+  // ── User activity detection — pause polling during active browser use ──
+  let lastUserActivity = 0; // timestamp of last mouse/keyboard/scroll event
   let commandActive = false; // Set true when commands arrive, cleared after execution
-  window.addEventListener("focus", () => { userHasFocus = true; });
-  window.addEventListener("blur", () => { userHasFocus = false; });
 
-  function getEffectivePollMs() {
-    // Normal speed when: user isn't focused, or commands are being processed
-    if (!userHasFocus || commandActive) return POLL_MS;
-    // Throttled when user is actively using the browser
-    return POLL_MS_THROTTLED;
+  function onUserActivity() {
+    lastUserActivity = Date.now();
+  }
+
+  // Track real interaction signals (passive to avoid perf impact)
+  window.addEventListener("mousemove", onUserActivity, { passive: true, capture: true });
+  window.addEventListener("mousedown", onUserActivity, { passive: true, capture: true });
+  window.addEventListener("keydown", onUserActivity, { passive: true, capture: true });
+  window.addEventListener("scroll", onUserActivity, { passive: true, capture: true });
+  window.addEventListener("wheel", onUserActivity, { passive: true, capture: true });
+  window.addEventListener("touchstart", onUserActivity, { passive: true, capture: true });
+
+  function isUserActive() {
+    return document.hasFocus() && (Date.now() - lastUserActivity) < USER_IDLE_MS;
   }
 
   // Use sessionStorage for per-tab ID (survives SPA navigation, unique per tab)
@@ -671,22 +678,28 @@
   log(`v${VERSION} loaded on ${window.location.hostname}`);
   post("/heartbeat", getPageState());
 
-  // Unified poll loop — handles both SPA navigation detection and command polling
-  // Adaptive interval: 3s normal, 10s when user has focus (prevents Edge hangs)
+  // Unified poll loop — pauses entirely when user is actively interacting
+  // Resumes after 5s of idle (no mouse/keyboard/scroll activity)
   let lastUrl = window.location.href;
   function tick() {
-    // Check for SPA navigation
+    // Check for SPA navigation regardless of user activity
     if (window.location.href !== lastUrl) {
       lastUrl = window.location.href;
       log(`Navigate: ${lastUrl.substring(0, 120)}`);
       post("/heartbeat", getPageStateCached());
     }
-    // Poll for commands
+
+    if (isUserActive()) {
+      // User is actively interacting — skip polling entirely, check back in 1s
+      setTimeout(tick, 1000);
+      return;
+    }
+
+    // User is idle or window unfocused — poll normally
     poll();
-    // Schedule next tick with adaptive interval
-    setTimeout(tick, getEffectivePollMs());
+    setTimeout(tick, POLL_MS);
   }
 
-  // Start the adaptive loop (setTimeout chain instead of fixed setInterval)
+  // Start the poll loop
   setTimeout(tick, 800);
 })();
