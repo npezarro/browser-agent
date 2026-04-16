@@ -122,6 +122,17 @@ A Manifest V3 Edge/Chrome extension (`extension/`) that provides capabilities un
 
 **Install**: Load `extension/` as unpacked extension in Edge, configure API URL and key in popup.
 
+## User-Activity Deferral (v1.13.0+)
+
+The TM script defers command execution when the user is actively interacting with the browser:
+
+- **Activity detection** — Tracks mouse, keyboard, and scroll events. User is "active" if any event fired within 5s.
+- **Command deferral** — When user is active, commands wait (polling every 1s) until user goes idle before executing. Prevents DOM operations from competing with user input.
+- **requestIdleCallback yielding** — Between every command, yields to the browser event loop via `requestIdleCallback` (2s timeout fallback). This lets the browser process rendering and pending input events between DOM operations.
+- **300ms breathing room** — Applied between all commands unconditionally (not just multi-command batches as in earlier versions).
+
+**Why this matters:** Browser agent commands (click, fill, setInput) modify the DOM. If the user is typing or clicking at the same time, the agent's DOM changes can interfere with user input, cause focus loss, or trigger unexpected React re-renders. Deferring ensures the agent and user don't fight over the page.
+
 ## install.html
 
 Version-controlled in this repo. Deploy script copies it to `/var/www/html/install.html`. When adding new TM scripts to the ecosystem, add them here.
