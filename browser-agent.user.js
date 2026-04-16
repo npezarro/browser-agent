@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Browser Agent (Generic)
 // @namespace    https://pezant.ca
-// @version      1.9.0
+// @version      1.10.0
 // @description  Generic remote browser agent. Polls server for commands, executes them, reports results. Works on all pages.
 // @author       npezarro
 // @match        *://*/*
@@ -24,10 +24,25 @@
   // Skip iframes — only run in top-level windows
   if (window.self !== window.top) return;
 
-  const VERSION = "1.9.0";
+  const VERSION = "1.10.0";
   const API_BASE = "https://pezant.ca/api/browser-agent";
   const API = API_BASE + "/agent";
   const POLL_MS = 3000;
+  const POLL_MS_THROTTLED = 10000; // Slower polling when user has focus (prevents Edge hangs)
+
+  // ── User focus detection — throttle polling when user is actively browsing ──
+  let userHasFocus = document.hasFocus();
+  let commandActive = false; // Set true when commands arrive, cleared after execution
+  window.addEventListener("focus", () => { userHasFocus = true; });
+  window.addEventListener("blur", () => { userHasFocus = false; });
+
+  function getEffectivePollMs() {
+    // Normal speed when: user isn't focused, or commands are being processed
+    if (!userHasFocus || commandActive) return POLL_MS;
+    // Throttled when user is actively using the browser
+    return POLL_MS_THROTTLED;
+  }
+
   // Use sessionStorage for per-tab ID (survives SPA navigation, unique per tab)
   const stored = sessionStorage.getItem("_browserAgentTabId");
   const tabId = stored || `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -615,6 +630,7 @@
           const data = JSON.parse(resp.responseText);
           if (!data.commands || data.commands.length === 0) return;
 
+          commandActive = true;
           for (const cmd of data.commands) {
             log(`Exec: ${cmd.action}${cmd.selector ? ` ${cmd.selector}` : ""}${cmd.text ? ` "${cmd.text}"` : ""}`);
             // Per-command timeout with cleanup to prevent timer accumulation
@@ -641,10 +657,12 @@
           }
         } catch (err) {
           origError("[BrowserAgent] Poll error:", err);
+        } finally {
+          commandActive = false;
         }
       },
-      onerror: () => { polling = false; },
-      ontimeout: () => { polling = false; },
+      onerror: () => { polling = false; commandActive = false; },
+      ontimeout: () => { polling = false; commandActive = false; },
     });
   }
 
@@ -654,7 +672,7 @@
   post("/heartbeat", getPageState());
 
   // Unified poll loop — handles both SPA navigation detection and command polling
-  // Single interval instead of two separate timers to reduce CPU pressure
+  // Adaptive interval: 3s normal, 10s when user has focus (prevents Edge hangs)
   let lastUrl = window.location.href;
   function tick() {
     // Check for SPA navigation
@@ -665,8 +683,10 @@
     }
     // Poll for commands
     poll();
+    // Schedule next tick with adaptive interval
+    setTimeout(tick, getEffectivePollMs());
   }
 
-  setInterval(tick, POLL_MS);
-  setTimeout(poll, 800);
+  // Start the adaptive loop (setTimeout chain instead of fixed setInterval)
+  setTimeout(tick, 800);
 })();
