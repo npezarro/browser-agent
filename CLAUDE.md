@@ -122,6 +122,18 @@ A Manifest V3 Edge/Chrome extension (`extension/`) that provides capabilities un
 
 **Install**: Load `extension/` as unpacked extension in Edge, configure API URL and key in popup.
 
+## Performance: Heartbeat Lite (v1.12.0+)
+
+Heartbeats use `getPageStateLite()` — only URL, title, and scroll position. **Zero DOM traversal, zero layout reflow.** Full `getPageState()` (buttons, inputs, text, errors) only runs on explicit `state` commands from the CLI.
+
+This matters for agents:
+- **Heartbeat data is minimal** — don't expect button/input lists from heartbeat responses
+- **Use `browser-cli state`** when you need the full page snapshot
+- Activity listeners throttled to 500ms; idle check at 2s during active use
+- Hidden tabs (`document.hidden`) always allow polling regardless of user focus
+
+Prior versions ran full DOM scanning on every heartbeat/SPA navigation, causing main thread freezes on heavy pages.
+
 ## install.html
 
 Version-controlled in this repo. Deploy script copies it to `/var/www/html/install.html`. When adding new TM scripts to the ecosystem, add them here.
