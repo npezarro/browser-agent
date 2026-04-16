@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Browser Agent (Generic)
 // @namespace    https://pezant.ca
-// @version      1.11.0
+// @version      1.12.0
 // @description  Generic remote browser agent. Polls server for commands, executes them, reports results. Works on all pages.
 // @author       npezarro
 // @match        *://*/*
@@ -24,7 +24,7 @@
   // Skip iframes — only run in top-level windows
   if (window.self !== window.top) return;
 
-  const VERSION = "1.11.0";
+  const VERSION = "1.12.0";
   const API_BASE = "https://pezant.ca/api/browser-agent";
   const API = API_BASE + "/agent";
   const POLL_MS = 3000;
@@ -34,19 +34,23 @@
   let lastUserActivity = 0; // timestamp of last mouse/keyboard/scroll event
   let commandActive = false; // Set true when commands arrive, cleared after execution
 
+  // Throttled activity tracker — mousemove fires per-pixel, so we cap updates to 500ms
+  let activityThrottled = false;
   function onUserActivity() {
+    if (activityThrottled) return;
     lastUserActivity = Date.now();
+    activityThrottled = true;
+    setTimeout(() => { activityThrottled = false; }, 500);
   }
 
-  // Track real interaction signals (passive to avoid perf impact)
-  window.addEventListener("mousemove", onUserActivity, { passive: true, capture: true });
-  window.addEventListener("mousedown", onUserActivity, { passive: true, capture: true });
-  window.addEventListener("keydown", onUserActivity, { passive: true, capture: true });
-  window.addEventListener("scroll", onUserActivity, { passive: true, capture: true });
-  window.addEventListener("wheel", onUserActivity, { passive: true, capture: true });
-  window.addEventListener("touchstart", onUserActivity, { passive: true, capture: true });
+  // Track real interaction signals (passive + capture to avoid perf impact)
+  for (const evt of ["mousemove", "mousedown", "keydown", "scroll", "wheel", "touchstart"]) {
+    window.addEventListener(evt, onUserActivity, { passive: true, capture: true });
+  }
 
+  // Also pause when tab is hidden (user switched away entirely)
   function isUserActive() {
+    if (document.hidden) return false; // Tab not visible — safe to poll
     return document.hasFocus() && (Date.now() - lastUserActivity) < USER_IDLE_MS;
   }
 
@@ -107,18 +111,20 @@
     });
   }
 
-  // ── Page introspection (cached — expensive DOM traversal) ──
+  // ── Page introspection ──
+  // Two modes:
+  //   getPageStateLite() — cheap metadata only, used for heartbeats/polling (no DOM scan)
+  //   getPageState()     — full DOM traversal, only called on explicit getState commands
 
-  let cachedPageState = null;
-  let cachedPageStateAt = 0;
-  const PAGE_STATE_TTL = 2000; // ms — reuse cached result within this window
-
-  function getPageStateCached() {
-    const now = Date.now();
-    if (cachedPageState && now - cachedPageStateAt < PAGE_STATE_TTL) return cachedPageState;
-    cachedPageState = getPageState();
-    cachedPageStateAt = now;
-    return cachedPageState;
+  function getPageStateLite() {
+    return {
+      tabId, url: window.location.href, title: document.title,
+      version: VERSION, ts: Date.now(),
+      scrollY: window.scrollY,
+      docHeight: document.documentElement.scrollHeight,
+      viewportHeight: window.innerHeight,
+      readyState: document.readyState,
+    };
   }
 
   function getPageState() {
@@ -167,14 +173,9 @@
     }
 
     return {
-      tabId, url: window.location.href, title: document.title,
-      version: VERSION, ts: Date.now(),
+      ...getPageStateLite(),
       buttons, inputs, dialogs, errors,
       bodyText: (document.body?.innerText || "").substring(0, 3000),
-      scrollY: window.scrollY,
-      docHeight: document.documentElement.scrollHeight,
-      viewportHeight: window.innerHeight,
-      readyState: document.readyState,
     };
   }
 
@@ -676,22 +677,23 @@
   // ── Init ──
 
   log(`v${VERSION} loaded on ${window.location.hostname}`);
-  post("/heartbeat", getPageState());
+  post("/heartbeat", getPageStateLite());
 
   // Unified poll loop — pauses entirely when user is actively interacting
-  // Resumes after 5s of idle (no mouse/keyboard/scroll activity)
+  // Heartbeats use lite state (no DOM scan). Full getPageState() only runs
+  // on explicit getState commands from CLI.
   let lastUrl = window.location.href;
   function tick() {
-    // Check for SPA navigation regardless of user activity
+    // Check for SPA navigation — lite heartbeat only (no DOM traversal)
     if (window.location.href !== lastUrl) {
       lastUrl = window.location.href;
       log(`Navigate: ${lastUrl.substring(0, 120)}`);
-      post("/heartbeat", getPageStateCached());
+      post("/heartbeat", getPageStateLite());
     }
 
     if (isUserActive()) {
-      // User is actively interacting — skip polling entirely, check back in 1s
-      setTimeout(tick, 1000);
+      // User is actively interacting — skip polling entirely, check back in 2s
+      setTimeout(tick, 2000);
       return;
     }
 
