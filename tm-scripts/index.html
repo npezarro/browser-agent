@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tampermonkey Scripts</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #1a1a2e; color: #eee; padding: 40px 20px; }
+    .container { max-width: 700px; margin: 0 auto; }
+    h1 { font-size: 1.6em; margin-bottom: 6px; }
+    .subtitle { opacity: 0.5; font-size: 0.85em; margin-bottom: 24px; }
+    .search-wrap { position: relative; margin-bottom: 28px; }
+    .search-wrap input {
+      width: 100%; padding: 12px 16px 12px 42px; border: 1px solid #2a2a4a;
+      border-radius: 10px; background: #16213e; color: #eee; font-size: 0.95em;
+      outline: none; transition: border-color 0.2s;
+    }
+    .search-wrap input:focus { border-color: #e94560; }
+    .search-wrap input::placeholder { color: #667; }
+    .search-wrap svg { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); opacity: 0.4; }
+    .search-count { font-size: 0.8em; opacity: 0.4; margin-top: 6px; text-align: right; }
+    .category { margin-bottom: 8px; }
+    .category-label { font-size: 0.75em; text-transform: uppercase; letter-spacing: 1.5px; opacity: 0.4; margin: 24px 0 10px; }
+    .card {
+      background: #16213e; border: 1px solid #0f3460; border-radius: 10px;
+      padding: 18px 20px; margin-bottom: 12px; transition: border-color 0.2s;
+    }
+    .card:hover { border-color: #e94560; }
+    .card-header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+    .card-header h2 { font-size: 1.05em; font-weight: 600; }
+    .badge {
+      display: inline-block; font-size: 0.65em; padding: 2px 8px;
+      border-radius: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .badge-active { background: #0f3460; color: #7eb8ff; }
+    .badge-legacy { background: #333; color: #999; }
+    .badge-utility { background: #2a1a3e; color: #c084fc; }
+    .version { font-size: 0.75em; opacity: 0.4; }
+    .card p { font-size: 0.88em; opacity: 0.7; line-height: 1.5; margin-bottom: 12px; }
+    .install-btn {
+      display: inline-block; background: #e94560; color: #fff; padding: 7px 18px;
+      border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 0.85em;
+      transition: background 0.2s;
+    }
+    .install-btn:hover { background: #c73e54; }
+    .card.legacy .install-btn { background: #555; }
+    .card.legacy .install-btn:hover { background: #666; }
+    .note {
+      background: #0a0a1a; border-radius: 8px; padding: 16px; margin-top: 28px;
+      font-size: 0.82em; opacity: 0.6; line-height: 1.6;
+    }
+    .note a { color: #e94560; }
+    .no-results { text-align: center; padding: 40px; opacity: 0.4; font-size: 0.95em; display: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Tampermonkey Scripts</h1>
+    <p class="subtitle">OAuth-protected install hub &mdash; all userscripts in one place</p>
+
+    <div class="search-wrap">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+      </svg>
+      <input type="text" id="search" placeholder="Search scripts..." autocomplete="off" autofocus>
+      <div class="search-count" id="count"></div>
+    </div>
+
+    <div id="scripts"></div>
+    <div class="no-results" id="no-results">No scripts match your search.</div>
+
+    <div class="note">
+      <strong>Tip:</strong> If clicking doesn't trigger Tampermonkey's install dialog, right-click the link &rarr; "Save link as",
+      then drag the downloaded .user.js file onto the Tampermonkey dashboard
+      (<a href="chrome-extension://dhdgffkkebhmkfjojejmpbldmpobfkfo/options.html#nav=utils">open dashboard</a>).
+    </div>
+  </div>
+
+<script>
+const SCRIPTS = [
+  {
+    name: "Browser Agent",
+    version: "1.13.0",
+    description: "Generic remote browser agent. Polls server for commands, executes them, reports results. Works on all pages. 30+ commands including click, navigate, eval, form fill, assertions.",
+    file: "browser-agent.user.js",
+    category: "General Purpose",
+    status: "active",
+    tags: ["browser", "automation", "testing", "generic"]
+  },
+  {
+    name: "Browser Logs",
+    version: "1.4",
+    description: "Lightweight read-only browser observer. Sends page state, console logs, and navigation events to a relay for CLI querying. No page interaction, no freezing.",
+    file: "browser-logs.user.js",
+    category: "General Purpose",
+    status: "active",
+    tags: ["logging", "debugging", "console", "observer"]
+  },
+  {
+    name: "Launcher",
+    version: "1.1",
+    description: "Centralized launcher for all userscripts. Press ~ to open/close. Auto-runs enabled scripts on matching sites.",
+    file: "launcher.user.js",
+    category: "General Purpose",
+    status: "active",
+    tags: ["launcher", "manager", "utility"]
+  },
+  {
+    name: "Phone Agent",
+    version: "1.0.3",
+    description: "WebRTC audio interception for AI phone calls via Google Voice. Captures mic and speaker streams for STT/TTS pipeline.",
+    file: "phone-agent.user.js",
+    category: "Phone & Voice",
+    status: "active",
+    tags: ["phone", "voice", "webrtc", "google voice"]
+  },
+  {
+    name: "Google Voice Enhanced",
+    version: "2.2",
+    description: "All-in-one GV improvements: dark mode toggle, keyboard shortcuts, character counter, wider threads, auto-dismiss banners, unread tab badge, and more.",
+    file: "google-voice-enhanced.user.js",
+    category: "Phone & Voice",
+    status: "active",
+    tags: ["google voice", "dark mode", "keyboard", "ui"]
+  },
+  {
+    name: "Remote Agent",
+    version: "1.1.0",
+    description: "Remote-controlled browser agent for game claiming. Polls server for commands, executes them, reports results. All claim logic is server-side.",
+    file: "remote-agent.user.js",
+    category: "Free Games",
+    status: "active",
+    tags: ["games", "claiming", "remote", "automation"]
+  },
+  {
+    name: "Humble Choice One-Click Claim",
+    version: "1.0.0",
+    description: "Adds a floating button to Humble Choice pages that selects and claims all unclaimed games in one click.",
+    file: "humblechoice-oneclickclaim.user.js",
+    category: "Free Games",
+    status: "active",
+    tags: ["humble", "games", "claiming"]
+  },
+  {
+    name: "Auto-Checkout",
+    version: "4.2.1",
+    description: "Multi-platform free game auto-checkout. Polls server for pending claims. Replaced by Remote Agent for most flows.",
+    file: "auto-checkout.user.js",
+    category: "Free Games",
+    status: "legacy",
+    tags: ["games", "checkout", "legacy"]
+  },
+  {
+    name: "Browser State Reporter",
+    version: "1.0.0",
+    description: "Sends page state snapshots to checkout server for remote debugging. Legacy companion to Auto-Checkout.",
+    file: "browser-state.user.js",
+    category: "Free Games",
+    status: "legacy",
+    tags: ["debugging", "state", "legacy"]
+  },
+  {
+    name: "Reddit Auto-Hide",
+    version: "2.0",
+    description: "Automatically hides Reddit posts after you scroll past them. Toggle to reveal hidden posts. Syncs across devices via Reddit's native hide API.",
+    file: "reddit-auto-hide.user.js",
+    category: "Reddit",
+    status: "active",
+    tags: ["reddit", "auto-hide", "scrolling"]
+  },
+  {
+    name: "TM Updater",
+    version: "1.0.0",
+    description: "Runs on the pezant.ca update page. Auto-triggers script install for seamless updates.",
+    file: "tm-updater.user.js",
+    category: "Utility",
+    status: "utility",
+    tags: ["updater", "utility", "meta"]
+  }
+];
+
+const container = document.getElementById('scripts');
+const searchInput = document.getElementById('search');
+const countEl = document.getElementById('count');
+const noResults = document.getElementById('no-results');
+
+function render(filter = '') {
+  const q = filter.toLowerCase();
+  const categories = {};
+  let visible = 0;
+
+  SCRIPTS.forEach(s => {
+    const haystack = [s.name, s.description, s.category, ...s.tags].join(' ').toLowerCase();
+    s._visible = !q || haystack.includes(q);
+    if (s._visible) {
+      visible++;
+      if (!categories[s.category]) categories[s.category] = [];
+      categories[s.category].push(s);
+    }
+  });
+
+  container.innerHTML = '';
+  const order = ["General Purpose", "Phone & Voice", "Free Games", "Reddit", "Utility"];
+  order.forEach(cat => {
+    if (!categories[cat]) return;
+    const section = document.createElement('div');
+    section.className = 'category';
+    section.innerHTML = `<div class="category-label">${cat}</div>`;
+    categories[cat].forEach(s => {
+      const statusClass = s.status === 'legacy' ? 'legacy' : '';
+      const badgeClass = s.status === 'legacy' ? 'badge-legacy' : s.status === 'utility' ? 'badge-utility' : 'badge-active';
+      const badgeLabel = s.status.charAt(0).toUpperCase() + s.status.slice(1);
+      section.innerHTML += `
+        <div class="card ${statusClass}">
+          <div class="card-header">
+            <h2>${s.name}</h2>
+            <span class="badge ${badgeClass}">${badgeLabel}</span>
+            <span class="version">v${s.version}</span>
+          </div>
+          <p>${s.description}</p>
+          <a class="install-btn" href="/tm-scripts/${s.file}">Install</a>
+        </div>`;
+    });
+    container.appendChild(section);
+  });
+
+  noResults.style.display = visible === 0 ? 'block' : 'none';
+  countEl.textContent = q ? `${visible} of ${SCRIPTS.length} scripts` : '';
+}
+
+searchInput.addEventListener('input', () => render(searchInput.value));
+render();
+</script>
+</body>
+</html>
