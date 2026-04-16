@@ -103,6 +103,14 @@ The CLI supports uploading local files to browser file inputs and drag-drop targ
 
 **CSP note:** Deepgram's console also blocks `eval`. Added to the list of CSP-restricted sites alongside Facebook and Google Photos.
 
+## Adaptive Polling + User Interaction Pause (v1.10.0/v1.11.0)
+
+- **v1.10.0**: Throttles polling from 3s to 10s when the browser window has focus. Snaps back to 3s when a command arrives or the tab loses focus.
+- **v1.11.0**: Pauses polling entirely when the user is actively interacting (mousemove, mousedown, keydown, scroll, wheel, touchstart). Resumes after 5s of idle. SPA navigation detection still runs during pause.
+- **Listeners**: All passive + capture to avoid performance impact.
+- **Agent impact**: Commands may take up to 5s longer to execute when the user is actively browsing. The `commandActive` flag ensures in-flight commands complete before pausing resumes.
+- **Why**: Prevents the TM script from interfering with user browsing (network requests, DOM queries during interaction). Reduces CPU pressure on pages the user is actively using.
+
 ## Companion Extension (v2.0.0+)
 
 A Manifest V3 Edge/Chrome extension (`extension/`) that provides capabilities unavailable to Tampermonkey:
