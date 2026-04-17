@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Browser Agent (Generic)
 // @namespace    https://pezant.ca
-// @version      1.13.0
+// @version      1.14.0
 // @description  Generic remote browser agent. Polls server for commands, executes them, reports results. Works on all pages.
 // @author       npezarro
 // @match        *://*/*
@@ -24,7 +24,7 @@
   // Skip iframes — only run in top-level windows
   if (window.self !== window.top) return;
 
-  const VERSION = "1.13.0";
+  const VERSION = "1.14.0";
   const API_BASE = "https://pezant.ca/api/browser-agent";
   const API = API_BASE + "/agent";
   const POLL_MS = 3000;
@@ -560,26 +560,37 @@
 
         case "clickAny": {
           // Click ANY visible element matching text — not just buttons
+          // Prefers exact matches over startsWith matches to avoid clicking
+          // validation error messages instead of the actual control
           const searchScope = cmd.scope || "*";
           const searchText = cmd.text.toLowerCase();
           let clickTarget = null;
           let matchNum = 0;
           const targetNth = cmd.nth || 1;
+
+          // Two-pass: first collect exact matches, then startsWith matches
+          const exactMatches = [];
+          const startsWithMatches = [];
+
           for (const candidate of document.querySelectorAll(searchScope)) {
             if (candidate.offsetParent === null && !candidate.closest("[role='listbox'], [role='menu'], [role='dialog']")) continue;
             const t = (candidate.innerText || candidate.textContent || "").trim().toLowerCase();
             if (t.length > 200) continue;
-            const match = cmd.exact ? t === searchText : t === searchText || t.startsWith(searchText + "\n");
-            if (match) {
-              if (!cmd.excludeText || !cmd.excludeText.some((ex) => t.includes(ex.toLowerCase()))) {
-                matchNum++;
-                if (matchNum === targetNth) {
-                  clickTarget = candidate;
-                  break;
-                }
-              }
+            if (cmd.excludeText && cmd.excludeText.some((ex) => t.includes(ex.toLowerCase()))) continue;
+
+            if (t === searchText) {
+              exactMatches.push(candidate);
+            } else if (!cmd.exact && t.startsWith(searchText + "\n")) {
+              startsWithMatches.push(candidate);
             }
           }
+
+          // Prefer exact matches, fall back to startsWith
+          const allMatches = [...exactMatches, ...startsWithMatches];
+          if (targetNth <= allMatches.length) {
+            clickTarget = allMatches[targetNth - 1];
+          }
+
           if (clickTarget) {
             clickTarget.scrollIntoView({ block: "center" });
             clickTarget.click();
@@ -662,7 +673,7 @@
 
             log(`Exec: ${cmd.action}${cmd.selector ? ` ${cmd.selector}` : ""}${cmd.text ? ` "${cmd.text}"` : ""}`);
             // Per-command timeout with cleanup to prevent timer accumulation
-            const cmdTimeout = cmd.timeout || 20000;
+            const cmdTimeout = cmd.timeout || 60000;
             let result;
             let timer;
             try {
