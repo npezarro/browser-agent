@@ -312,6 +312,22 @@ case "$cmd" in
     interactive "${2:-$DEFAULT_TAB}" "$(jq -nc --arg s "${1:?selector required}" '{action:"assertSelector", selector:$s, negate:true}')"
     ;;
 
+  cdp-type|ct)
+    # Type via Chrome DevTools Protocol (trusted events — works on React/FB)
+    # Usage: cdp-type <selector> <text> [tabUrl]
+    local_url="${3:-}"
+    interactive "" "$(jq -nc --arg s "${1:?selector required}" --arg t "${2:?text required}" --arg u "$local_url" \
+      'if $u != "" then {action:"cdpType", selector:$s, text:$t, url:$u} else {action:"cdpType", selector:$s, text:$t} end')"
+    ;;
+
+  cdp-click|cc)
+    # Click via Chrome DevTools Protocol (trusted events)
+    # Usage: cdp-click <selector> [tabUrl]
+    local_url2="${2:-}"
+    interactive "" "$(jq -nc --arg s "${1:?selector required}" --arg u "$local_url2" \
+      'if $u != "" then {action:"cdpClick", selector:$s, url:$u} else {action:"cdpClick", selector:$s} end')"
+    ;;
+
   console)
     interactive "${2:-$DEFAULT_TAB}" "$(jq -nc --argjson n "${1:-50}" '{action:"getConsoleLog", count:$n}')"
     ;;
