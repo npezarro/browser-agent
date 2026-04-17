@@ -122,6 +122,19 @@ A Manifest V3 Edge/Chrome extension (`extension/`) that provides capabilities un
 
 **Install**: Load `extension/` as unpacked extension in Edge, configure API URL and key in popup.
 
+## CDP Trusted Input (v1.2.0 ext)
+
+The extension uses `chrome.debugger` (Chrome DevTools Protocol) to send **trusted** keyboard and mouse events that bypass `isTrusted` checks on sites like Facebook.
+
+- **`browser-cli cdp-type <selector> <text> [tabUrl]`** — Type text via CDP `Input.insertText` per character. Focuses selector first, clears existing content (Ctrl+A, Backspace), then types character-by-character with 30ms delay.
+- **`browser-cli cdp-click <selector> [tabUrl]`** — Click via CDP `Input.dispatchMouseEvent` at element center coordinates.
+
+**Why:** Facebook (and other sites) check `event.isTrusted` on input events. TM script synthetic events (`dispatchEvent`, `execCommand`) are marked `isTrusted: false` and get silently ignored. CDP events go through the browser's input pipeline and are treated as real user input.
+
+**Architecture:** CLI sends `cdpType`/`cdpClick` action to relay server → extension polls `/ext/commands` → extension attaches `chrome.debugger` to tab, sends CDP commands, detaches. The debugger attaches/detaches per command to minimize interference.
+
+**When to use:** Use `cdp-type`/`cdp-click` on sites that block synthetic events (Facebook, sites with `isTrusted` guards). For most sites, regular `type`/`click` commands via TM script are simpler and sufficient.
+
 ## install.html
 
 Version-controlled in this repo. Deploy script copies it to `/var/www/html/install.html`. When adding new TM scripts to the ecosystem, add them here.
