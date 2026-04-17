@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Browser Agent (Generic)
 // @namespace    https://pezant.ca
-// @version      1.14.1
+// @version      1.14.2
 // @description  Generic remote browser agent. Polls server for commands, executes them, reports results. Works on all pages.
 // @author       npezarro
 // @match        *://*/*
@@ -24,7 +24,7 @@
   // Skip iframes — only run in top-level windows
   if (window.self !== window.top) return;
 
-  const VERSION = "1.14.1";
+  const VERSION = "1.14.2";
   const API_BASE = "https://pezant.ca/api/browser-agent";
   const API = API_BASE + "/agent";
   const POLL_MS = 3000;
@@ -369,16 +369,18 @@
         case "setInput": {
           const inputEl = document.querySelector(cmd.selector);
           if (inputEl) {
-            // Focus first for React-style apps
             inputEl.focus();
-            // Use native setter matching the element type to avoid Illegal invocation
+            // Reset React's internal value tracker so it detects the change
+            const tracker = inputEl._valueTracker;
+            if (tracker) tracker.setValue("");
+            // Use native setter matching the element type
             const proto = inputEl.tagName === "TEXTAREA"
               ? window.HTMLTextAreaElement.prototype
               : window.HTMLInputElement.prototype;
             const nativeSet = Object.getOwnPropertyDescriptor(proto, "value")?.set;
             if (nativeSet) nativeSet.call(inputEl, cmd.value);
             else inputEl.value = cmd.value;
-            // Use InputEvent with inputType for React compatibility
+            // Fire InputEvent — React listens for this
             inputEl.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: cmd.value, bubbles: true, cancelable: true }));
             inputEl.dispatchEvent(new Event("change", { bubbles: true }));
             result = { set: true };
@@ -394,16 +396,19 @@
           if (typeEl) {
             typeEl.focus();
             for (const char of cmd.text) {
+              // Reset React's value tracker so it detects each keystroke
+              const vt = typeEl._valueTracker;
+              if (vt) vt.setValue(typeEl.value);
               typeEl.dispatchEvent(new KeyboardEvent("keydown", { key: char, code: `Key${char.toUpperCase()}`, bubbles: true }));
               typeEl.dispatchEvent(new KeyboardEvent("keypress", { key: char, code: `Key${char.toUpperCase()}`, bubbles: true }));
-              // Update value — use correct prototype for the element type
+              // Update value via native setter
               const typeProto = typeEl.tagName === "TEXTAREA"
                 ? window.HTMLTextAreaElement.prototype
                 : window.HTMLInputElement.prototype;
               const nSet = Object.getOwnPropertyDescriptor(typeProto, "value")?.set;
               if (nSet) nSet.call(typeEl, typeEl.value + char);
               else typeEl.value += char;
-              // Use InputEvent with inputType — React listens for this, not bare Event("input")
+              // Fire InputEvent — React listens for this
               typeEl.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: char, bubbles: true, cancelable: true }));
               typeEl.dispatchEvent(new KeyboardEvent("keyup", { key: char, code: `Key${char.toUpperCase()}`, bubbles: true }));
               if (cmd.delay) await new Promise((r) => setTimeout(r, cmd.delay));
