@@ -461,7 +461,7 @@ function createApp(opts = {}) {
       if (!checkAuth(req)) return json(res, { error: "Unauthorized" }, 401);
       try {
         const { tabId: tid, command, timeout } = await readBody(req);
-        const timeoutMs = Math.min(timeout || 30000, 60000);
+        const timeoutMs = Math.min(timeout || 30000, 300000);
 
         // Check if this is a tab-management command and extension is connected
         if (shouldRouteToExtension(command.action, extLastHeartbeat, EXT_TTL)) {
@@ -490,9 +490,10 @@ function createApp(opts = {}) {
           if (!target) return json(res, { error: "No browser tabs connected" }, 503);
         }
 
-        // Assign ID and queue
+        // Assign ID and queue (pass timeout to TM script so it doesn't kill slow commands)
         const cmd = { ...command };
         cmd.id = `cmd-${++cmdIdCounter}`;
+        cmd.timeout = timeoutMs;
         if (!agentCommands[target]) agentCommands[target] = [];
         agentCommands[target].push(cmd);
 
