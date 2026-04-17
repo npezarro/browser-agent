@@ -84,7 +84,7 @@ The CLI supports uploading local files to browser file inputs and drag-drop targ
 - **`browser-cli click-any <"text"> [tabId]`** — Searches ALL visible elements for matching text (not just buttons/links). Essential for custom React dropdowns (e.g., FB Marketplace category/condition) that render options as plain `<div>` or `<span>` elements.
 - Via API, supports `scope` parameter to narrow search (e.g., `"span, a, [role=option]"`) and `exact: true` for exact text matching.
 
-**Per-command timeout:** Each command has a 20s execution timeout via `Promise.race` in the poll loop. If a command hangs (e.g., `setInput` triggering an infinite React re-render), it fails gracefully instead of poisoning the entire command queue for that tab.
+**Per-command timeout:** Each command has a 60s default execution timeout via `Promise.race` in the poll loop (increased from 20s in v1.14.0 for slow pages like Facebook). If a command hangs (e.g., `setInput` triggering an infinite React re-render), it fails gracefully instead of poisoning the entire command queue for that tab. Server timeout cap is 300s. CLI can pass `--timeout` which propagates end-to-end through server to TM script.
 
 **CSP limitations:** Both Facebook and Google Photos block `eval`/`new Function()` via Content Security Policy. All automation must use built-in commands — no arbitrary JS execution on these sites.
 
@@ -102,6 +102,12 @@ The CLI supports uploading local files to browser file inputs and drag-drop targ
 - **Button deduplication removed** — `getPageState` no longer hides duplicate-text buttons. Each button now includes an `nth` field showing its occurrence number, so agents can see "Create Key (nth:1)" vs "Create Key (nth:2)".
 
 **CSP note:** Deepgram's console also blocks `eval`. Added to the list of CSP-restricted sites alongside Facebook and Google Photos.
+
+## Timeout Propagation + clickAny Precision (v1.14.0+)
+
+- **Default timeout 60s** — FB Marketplace pages take 60-120s per command; the old 20s default was killing every operation. Server cap raised to 300s.
+- **End-to-end timeout propagation** — CLI `--timeout` value is passed through the relay server to the TM script command object, so slow-page workflows can set appropriate timeouts per-command.
+- **clickAny two-pass matching** — First pass looks for exact text matches, second pass falls back to `startsWith` matches. This prevents validation error messages (e.g., "Category is required") from being clicked instead of the actual dropdown trigger element that happens to contain the same prefix text.
 
 ## Companion Extension (v2.0.0+)
 
