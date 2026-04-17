@@ -104,6 +104,12 @@ async function executeCommand(cmd) {
       case "captureTab":
         result = await cmdCaptureTab(cmd);
         break;
+      case "cdpType":
+        result = await cmdCdpType(cmd);
+        break;
+      case "cdpClick":
+        result = await cmdCdpClick(cmd);
+        break;
       default:
         result = { error: `Unknown extension command: ${cmd.action}` };
     }
@@ -212,6 +218,156 @@ async function cmdCaptureTab(cmd) {
     quality: cmd.quality || 90,
   });
   return { dataUrl, chromeTabId: tabId };
+}
+
+// --- CDP Commands (trusted input via chrome.debugger) ---
+
+// Helper: find Chrome tab ID by URL match or chromeTabId
+async function resolveTabId(cmd) {
+  if (cmd.chromeTabId) return cmd.chromeTabId;
+  if (cmd.url) {
+    const tabs = await chrome.tabs.query({});
+    const match = tabs.find(
+      (t) => t.url && t.url.includes(cmd.url)
+    );
+    if (match) return match.id;
+  }
+  // Fallback: active tab
+  const [active] = await chrome.tabs.query({
+    active: true,
+    currentWindow: true,
+  });
+  return active?.id;
+}
+
+// Attach debugger, run fn, detach
+async function withDebugger(tabId, fn) {
+  const target = { tabId };
+  await chrome.debugger.attach(target, "1.3");
+  try {
+    return await fn(target);
+  } finally {
+    await chrome.debugger.detach(target).catch(() => {});
+  }
+}
+
+// Send a CDP command
+function cdp(target, method, params = {}) {
+  return chrome.debugger.sendCommand(target, method, params);
+}
+
+/**
+ * Type text into the focused element using CDP Input.dispatchKeyEvent.
+ * These are trusted events — React/FB will process them like real user input.
+ *
+ * cmd: { url?, chromeTabId?, text, selector?, delay? }
+ */
+async function cmdCdpType(cmd) {
+  const tabId = await resolveTabId(cmd);
+  if (!tabId) return { error: "Tab not found" };
+
+  return withDebugger(tabId, async (target) => {
+    // If a selector is provided, focus it first via DOM methods
+    if (cmd.selector) {
+      await cdp(target, "Runtime.evaluate", {
+        expression: `(() => {
+          const el = document.querySelector(${JSON.stringify(cmd.selector)});
+          if (el) { el.focus(); el.select?.(); return 'focused'; }
+          return 'not found';
+        })()`,
+        returnByValue: true,
+      });
+      await new Promise((r) => setTimeout(r, 500));
+    }
+
+    // Clear existing content if field has value
+    if (!cmd.append) {
+      await cdp(target, "Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "a",
+        code: "KeyA",
+        windowsVirtualKeyCode: 65,
+        modifiers: 2, // Ctrl
+      });
+      await cdp(target, "Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: "a",
+        code: "KeyA",
+        windowsVirtualKeyCode: 65,
+        modifiers: 2,
+      });
+      await cdp(target, "Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "Backspace",
+        code: "Backspace",
+        windowsVirtualKeyCode: 8,
+      });
+      await cdp(target, "Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: "Backspace",
+        code: "Backspace",
+        windowsVirtualKeyCode: 8,
+      });
+      await new Promise((r) => setTimeout(r, 300));
+    }
+
+    // Type each character
+    const delay = cmd.delay || 30;
+    for (const char of cmd.text) {
+      // Use insertText for printable characters — most reliable
+      await cdp(target, "Input.insertText", { text: char });
+      await new Promise((r) => setTimeout(r, delay));
+    }
+
+    return { typed: true, length: cmd.text.length, method: "cdp" };
+  });
+}
+
+/**
+ * Click at an element's position using CDP Input.dispatchMouseEvent.
+ * Trusted click — bypasses isTrusted checks.
+ *
+ * cmd: { url?, chromeTabId?, selector, x?, y? }
+ */
+async function cmdCdpClick(cmd) {
+  const tabId = await resolveTabId(cmd);
+  if (!tabId) return { error: "Tab not found" };
+
+  return withDebugger(tabId, async (target) => {
+    // Get element position
+    const evalResult = await cdp(target, "Runtime.evaluate", {
+      expression: `(() => {
+        const el = document.querySelector(${JSON.stringify(cmd.selector)});
+        if (!el) return JSON.stringify({error: 'not found'});
+        const r = el.getBoundingClientRect();
+        return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
+      })()`,
+      returnByValue: true,
+    });
+
+    const pos = JSON.parse(evalResult.result.value);
+    if (pos.error) return { clicked: false, error: pos.error };
+
+    const x = cmd.x || pos.x;
+    const y = cmd.y || pos.y;
+
+    await cdp(target, "Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x,
+      y,
+      button: "left",
+      clickCount: 1,
+    });
+    await cdp(target, "Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x,
+      y,
+      button: "left",
+      clickCount: 1,
+    });
+
+    return { clicked: true, x, y, method: "cdp" };
+  });
 }
 
 // --- Badge ---

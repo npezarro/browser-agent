@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Browser Agent Tab Manager",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Companion extension for browser-agent. Provides background tab creation, tab queries, and focus management.",
   "permissions": [
     "tabs",
     "storage",
     "alarms",
-    "activeTab"
+    "activeTab",
+    "debugger"
   ],
   "host_permissions": [
     "https://pezant.ca/*",
