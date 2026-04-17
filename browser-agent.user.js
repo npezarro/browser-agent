@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Browser Agent (Generic)
 // @namespace    https://pezant.ca
-// @version      1.14.0
+// @version      1.14.1
 // @description  Generic remote browser agent. Polls server for commands, executes them, reports results. Works on all pages.
 // @author       npezarro
 // @match        *://*/*
@@ -24,7 +24,7 @@
   // Skip iframes — only run in top-level windows
   if (window.self !== window.top) return;
 
-  const VERSION = "1.14.0";
+  const VERSION = "1.14.1";
   const API_BASE = "https://pezant.ca/api/browser-agent";
   const API = API_BASE + "/agent";
   const POLL_MS = 3000;
@@ -378,7 +378,8 @@
             const nativeSet = Object.getOwnPropertyDescriptor(proto, "value")?.set;
             if (nativeSet) nativeSet.call(inputEl, cmd.value);
             else inputEl.value = cmd.value;
-            inputEl.dispatchEvent(new Event("input", { bubbles: true }));
+            // Use InputEvent with inputType for React compatibility
+            inputEl.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: cmd.value, bubbles: true, cancelable: true }));
             inputEl.dispatchEvent(new Event("change", { bubbles: true }));
             result = { set: true };
           } else {
@@ -388,13 +389,13 @@
         }
 
         case "type": {
-          // Simulate real keystrokes for apps that listen to keydown/keypress/keyup
+          // Simulate real keystrokes — uses InputEvent with inputType for React compatibility
           const typeEl = cmd.selector ? document.querySelector(cmd.selector) : document.activeElement;
           if (typeEl) {
             typeEl.focus();
             for (const char of cmd.text) {
-              typeEl.dispatchEvent(new KeyboardEvent("keydown", { key: char, bubbles: true }));
-              typeEl.dispatchEvent(new KeyboardEvent("keypress", { key: char, bubbles: true }));
+              typeEl.dispatchEvent(new KeyboardEvent("keydown", { key: char, code: `Key${char.toUpperCase()}`, bubbles: true }));
+              typeEl.dispatchEvent(new KeyboardEvent("keypress", { key: char, code: `Key${char.toUpperCase()}`, bubbles: true }));
               // Update value — use correct prototype for the element type
               const typeProto = typeEl.tagName === "TEXTAREA"
                 ? window.HTMLTextAreaElement.prototype
@@ -402,8 +403,9 @@
               const nSet = Object.getOwnPropertyDescriptor(typeProto, "value")?.set;
               if (nSet) nSet.call(typeEl, typeEl.value + char);
               else typeEl.value += char;
-              typeEl.dispatchEvent(new Event("input", { bubbles: true }));
-              typeEl.dispatchEvent(new KeyboardEvent("keyup", { key: char, bubbles: true }));
+              // Use InputEvent with inputType — React listens for this, not bare Event("input")
+              typeEl.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: char, bubbles: true, cancelable: true }));
+              typeEl.dispatchEvent(new KeyboardEvent("keyup", { key: char, code: `Key${char.toUpperCase()}`, bubbles: true }));
               if (cmd.delay) await new Promise((r) => setTimeout(r, cmd.delay));
             }
             typeEl.dispatchEvent(new Event("change", { bubbles: true }));
