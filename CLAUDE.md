@@ -88,8 +88,9 @@ The CLI supports uploading local files to browser file inputs and drag-drop targ
 
 **CSP limitations:** Both Facebook and Google Photos block `eval`/`new Function()` via Content Security Policy. All automation must use built-in commands — no arbitrary JS execution on these sites.
 
-**React gotchas:**
-- `setInput` uses native value setters which bypass React's `onChange` — breaks autocomplete fields. Use `type` for searchable inputs.
+**React compatibility (v1.14.1+):**
+- `setInput` and `type` both dispatch `InputEvent` with `inputType:"insertText"`, which React 16+ recognizes for synthetic `onChange`. Prior to v1.14.1, `setInput` used bare `Event("input")` which React ignored — that limitation is now fixed.
+- `type` also includes `code` property on `KeyboardEvent` for better framework compatibility.
 - Newlines and double-quote chars in `setInput` values can cause timeouts on FB.
 - Category dropdowns: must click the SPAN leaf element, not the parent DIV container, for React to register the selection.
 
