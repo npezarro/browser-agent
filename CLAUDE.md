@@ -11,7 +11,8 @@ browser-cli.sh → (HTTPS) → agent-server.js (VM:3102) → (poll) → browser-
 - **browser-agent.user.js** — TM userscript, matches all pages, polls `/agent/commands` every 3s
 - **agent-server.js** — Node.js relay server, PM2 `browser-agent`, port 3102
 - **browser-cli.sh** — Bash CLI wrapper, symlinked at `~/bin/browser-cli`
-- **install.html** — Centralized TM script install page, deployed to `/var/www/html/install.html`
+- **tm-scripts/index.html** — OAuth-gated TM scripts install page, deployed to `/var/www/html/tm-scripts/`
+- **sync-tm-scripts.sh** — Deploys all TM scripts from source repos to VM, syncs install page
 
 ## Key Endpoints
 
@@ -22,7 +23,8 @@ browser-cli.sh → (HTTPS) → agent-server.js (VM:3102) → (poll) → browser-
 ## Deploy
 
 ```bash
-bash deploy.sh   # copies files to VM, restarts PM2, deploys TM script + install.html
+bash deploy.sh   # copies files to VM, restarts PM2, deploys TM script
+bash sync-tm-scripts.sh  # syncs all TM scripts + install page to VM
 ```
 
 After deploy, update the TM script in Edge (auto-update or reinstall from `pezant.ca/browser-agent.user.js`).
@@ -122,6 +124,12 @@ A Manifest V3 Edge/Chrome extension (`extension/`) that provides capabilities un
 
 **Install**: Load `extension/` as unpacked extension in Edge, configure API URL and key in popup.
 
-## install.html
+## TM Scripts Install Page
 
-Version-controlled in this repo. Deploy script copies it to `/var/www/html/install.html`. When adding new TM scripts to the ecosystem, add them here.
+OAuth-gated install hub at `pezant.ca/tm-scripts/` (source: `tm-scripts/index.html`). Old `install.html` redirects here.
+
+When adding a new TM script:
+1. Add entry to `SCRIPTS` array in `tm-scripts/index.html`
+2. Add source path mapping to `SOURCES` in `sync-tm-scripts.sh`
+3. If script needs ungated auto-update hosting, add to `UNGATED` array
+4. Run `sync-tm-scripts.sh` to deploy
