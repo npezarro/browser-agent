@@ -311,15 +311,39 @@ async function cmdCdpType(cmd) {
       await new Promise((r) => setTimeout(r, 300));
     }
 
-    // Type each character
-    const delay = cmd.delay || 30;
+    // Type each character using dispatchKeyEvent (not insertText).
+    // dispatchKeyEvent generates real keyboard events that React's
+    // controlled inputs respond to. insertText bypasses React state.
+    const delay = cmd.delay || 50;
     for (const char of cmd.text) {
-      // Use insertText for printable characters — most reliable
-      await cdp(target, "Input.insertText", { text: char });
+      const keyCode = char.charCodeAt(0);
+      await cdp(target, "Input.dispatchKeyEvent", {
+        type: "keyDown",
+        text: char,
+        key: char,
+        code: `Key${char.toUpperCase()}`,
+        windowsVirtualKeyCode: keyCode,
+        nativeVirtualKeyCode: keyCode,
+      });
+      await cdp(target, "Input.dispatchKeyEvent", {
+        type: "char",
+        text: char,
+        key: char,
+        code: `Key${char.toUpperCase()}`,
+        windowsVirtualKeyCode: keyCode,
+        nativeVirtualKeyCode: keyCode,
+      });
+      await cdp(target, "Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: char,
+        code: `Key${char.toUpperCase()}`,
+        windowsVirtualKeyCode: keyCode,
+        nativeVirtualKeyCode: keyCode,
+      });
       await new Promise((r) => setTimeout(r, delay));
     }
 
-    return { typed: true, length: cmd.text.length, method: "cdp" };
+    return { typed: true, length: cmd.text.length, method: "cdp-keyevent" };
   });
 }
 

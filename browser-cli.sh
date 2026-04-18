@@ -405,12 +405,12 @@ json.dump({'blobId': sys.argv[2], 'base64': b64, 'filename': sys.argv[3], 'mimet
       exit 1
     fi
 
-    # Step 2: Send uploadFile command to browser
+    # Step 2: Send uploadFile command to browser (use TIMEOUT env var, default 120s for large files)
     interactive "$local_tab" "$(jq -nc \
       --arg s "$local_selector" \
       --arg bid "$local_blobid" \
       --argjson dd "$local_dragdrop" \
-      '{action:"uploadFile", selector:$s, blobId:$bid, dragDrop:$dd}')" 45
+      '{action:"uploadFile", selector:$s, blobId:$bid, dragDrop:$dd}')" "${TIMEOUT:-120}"
     ;;
 
   wait-render|wr)
