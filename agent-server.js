@@ -332,8 +332,10 @@ function createApp(opts = {}) {
     if (req.method === "GET" && path === "/health") {
       pruneTabs();
       return json(res, {
-        ok: true,
-        tabs: Object.keys(agentTabs).length,
+        status: "ok",
+        service: "browser-agent",
+        uptime: Math.floor(process.uptime()),
+        connectedClients: Object.keys(agentTabs).length,
         pendingCommands: Object.values(agentCommands).reduce((s, c) => s + c.length, 0),
         results: agentResults.length,
       });
