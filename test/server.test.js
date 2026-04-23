@@ -65,8 +65,9 @@ describe("GET /health", () => {
   it("returns ok with counts", async () => {
     const r = await get("/health");
     assert.equal(r.status, 200);
-    assert.equal(r.body.ok, true);
-    assert.equal(typeof r.body.tabs, "number");
+    assert.equal(r.body.status, "ok");
+    assert.equal(r.body.service, "browser-agent");
+    assert.equal(typeof r.body.connectedClients, "number");
     assert.equal(typeof r.body.pendingCommands, "number");
     assert.equal(typeof r.body.results, "number");
   });
