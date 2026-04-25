@@ -320,12 +320,12 @@ async function cmdCdpType(cmd) {
     // Type each character using dispatchKeyEvent (not insertText).
     // dispatchKeyEvent generates real keyboard events that React's
     // controlled inputs respond to. insertText bypasses React state.
-    const delay = cmd.delay || 50;
+    const delay = cmd.delay || 30;
     for (const char of cmd.text) {
       const keyCode = char.charCodeAt(0);
+      // keyDown without text — text only in char event to avoid double insertion
       await cdp(target, "Input.dispatchKeyEvent", {
         type: "keyDown",
-        text: char,
         key: char,
         code: `Key${char.toUpperCase()}`,
         windowsVirtualKeyCode: keyCode,
