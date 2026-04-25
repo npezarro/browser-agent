@@ -26,8 +26,9 @@ Last Updated: 2026-04-25 — v2.2.0: CDP enhancements for CSP-restricted sites
 - **CSP blocks eval** on FB, Google Photos, Deepgram — use `cdpEval` instead (bypasses CSP via debugger)
 - **CDP keyDown text field** causes double character insertion — only set `text` on `char` event type
 - **React mouseMoved requirement**: CDP click must send `mouseMoved` before `mousePressed` for React handlers to fire
-- **FB Category is a dialog picker**, not autocomplete. Click combobox -> dialog with `[role="button"]` items -> click the button. NOT `[role="option"]`.
-- **FB Condition IS a standard dropdown** with `[role="option"]` elements
+- **CDP Input.dispatchMouseEvent does NOT work for FB comboboxes**: Must use `element.click()` via `cdpEval` instead. CDP mouse events fire but FB's React event delegation ignores them on combobox elements.
+- **FB Category is a dialog picker**, not autocomplete. Open via `cdpEval` `combo.click()` -> dialog with `[role="button"]` items -> `button.click()`. NOT `[role="option"]`.
+- **FB Condition IS a standard dropdown** with `[role="option"]` elements. Title case: "Used - Good" (not lowercase).
 - **Content script timer throttling**: Chrome throttles `setTimeout` in unfocused tabs. CDP commands (routed through background worker) bypass this.
 - **Content script isolated world:** DOM access works, page JS globals don't.
 - **setInput** bypasses React onChange — use `type` or `cdp-type` for React inputs.
