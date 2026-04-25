@@ -110,6 +110,12 @@ async function executeCommand(cmd) {
       case "cdpClick":
         result = await cmdCdpClick(cmd);
         break;
+      case "cdpEval":
+        result = await cmdCdpEval(cmd);
+        break;
+      case "cdpKeys":
+        result = await cmdCdpKeys(cmd);
+        break;
       default:
         result = { error: `Unknown extension command: ${cmd.action}` };
     }
@@ -391,6 +397,59 @@ async function cmdCdpClick(cmd) {
     });
 
     return { clicked: true, x, y, method: "cdp" };
+  });
+}
+
+/**
+ * Evaluate JS in the page context via CDP Runtime.evaluate.
+ * Bypasses CSP — works on Facebook, Google Photos, etc.
+ *
+ * cmd: { url?, chromeTabId?, expression }
+ */
+async function cmdCdpEval(cmd) {
+  const tabId = await resolveTabId(cmd);
+  if (!tabId) return { error: "Tab not found" };
+
+  return withDebugger(tabId, async (target) => {
+    const result = await cdp(target, "Runtime.evaluate", {
+      expression: cmd.expression,
+      returnByValue: true,
+      awaitPromise: !!cmd.awaitPromise,
+    });
+    if (result.exceptionDetails) {
+      return { error: result.exceptionDetails.text || "Eval error" };
+    }
+    return { value: result.result.value };
+  });
+}
+
+/**
+ * Send special key events (ArrowDown, Enter, Tab, Escape, etc.) via CDP.
+ * Each key in the array gets keyDown + keyUp dispatched.
+ *
+ * cmd: { url?, chromeTabId?, keys: [{key, code, keyCode}] }
+ */
+async function cmdCdpKeys(cmd) {
+  const tabId = await resolveTabId(cmd);
+  if (!tabId) return { error: "Tab not found" };
+
+  return withDebugger(tabId, async (target) => {
+    for (const k of cmd.keys) {
+      await cdp(target, "Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: k.key,
+        code: k.code || "",
+        windowsVirtualKeyCode: k.keyCode || 0,
+      });
+      await cdp(target, "Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: k.key,
+        code: k.code || "",
+        windowsVirtualKeyCode: k.keyCode || 0,
+      });
+      await new Promise((r) => setTimeout(r, k.delay || 100));
+    }
+    return { sent: true, count: cmd.keys.length };
   });
 }
 
