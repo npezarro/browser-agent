@@ -403,6 +403,25 @@ function updateBadge() {
   });
 }
 
+// --- Content Script Messages ---
+
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.type === "ba-notify") {
+    const id = `ba-${Date.now()}`;
+    chrome.notifications.create(id, {
+      type: "basic",
+      iconUrl: "icons/icon48.png",
+      title: request.title || "Browser Agent",
+      message: request.text || "",
+    });
+    if (request.timeout) {
+      setTimeout(() => chrome.notifications.clear(id).catch(() => {}), request.timeout);
+    }
+    sendResponse({ sent: true });
+    return false;
+  }
+});
+
 // --- Lifecycle ---
 
 async function start() {
