@@ -149,7 +149,8 @@ The extension uses `chrome.debugger` (Chrome DevTools Protocol) to send **truste
 **CDP gotchas:**
 - `keyDown` must NOT include `text` property; only `char` event should have `text`. Otherwise characters are inserted twice.
 - `cdpClick` must send `mouseMoved` before `mousePressed` for React handlers to fire on dialog items.
-- `cdpEval` returns values via `returnByValue: true`. Promises need `awaitPromise: true` (not yet exposed via CLI).
+- **`cdpClick` (Input.dispatchMouseEvent) does NOT trigger FB React handlers on comboboxes.** For FB form controls (category, condition dropdowns), use `element.click()` via `cdpEval` instead. This is a fundamental React event delegation issue on Facebook specifically.
+- `cdpEval` returns values via `returnByValue: true`. Promises supported via `--await` flag: `browser-cli cdp-eval "expr" url --await`.
 
 ## Upload Timeout
 
