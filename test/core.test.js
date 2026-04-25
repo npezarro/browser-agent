@@ -628,6 +628,29 @@ describe("shouldRouteToExtension", () => {
     assert.ok(shouldRouteToExtension("captureTab", NOW - 5000, EXT_TTL, NOW));
   });
 
+  it("routes cdpType to extension", () => {
+    assert.ok(shouldRouteToExtension("cdpType", NOW - 5000, EXT_TTL, NOW));
+  });
+
+  it("routes cdpClick to extension", () => {
+    assert.ok(shouldRouteToExtension("cdpClick", NOW - 5000, EXT_TTL, NOW));
+  });
+
+  it("routes cdpEval to extension", () => {
+    assert.ok(shouldRouteToExtension("cdpEval", NOW - 5000, EXT_TTL, NOW));
+  });
+
+  it("routes cdpKeys to extension", () => {
+    assert.ok(shouldRouteToExtension("cdpKeys", NOW - 5000, EXT_TTL, NOW));
+  });
+
+  it("does not route CDP commands when extension is dead", () => {
+    assert.ok(!shouldRouteToExtension("cdpType", NOW - 50000, EXT_TTL, NOW));
+    assert.ok(!shouldRouteToExtension("cdpClick", NOW - 50000, EXT_TTL, NOW));
+    assert.ok(!shouldRouteToExtension("cdpEval", NOW - 50000, EXT_TTL, NOW));
+    assert.ok(!shouldRouteToExtension("cdpKeys", NOW - 50000, EXT_TTL, NOW));
+  });
+
   it("does not route non-tab commands", () => {
     assert.ok(!shouldRouteToExtension("click", NOW - 5000, EXT_TTL, NOW));
   });

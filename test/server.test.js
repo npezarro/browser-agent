@@ -393,6 +393,113 @@ describe("POST /agent/interactive", () => {
   });
 });
 
+// ── CDP routing through interactive ──
+
+describe("POST /agent/interactive — CDP routing", () => {
+  afterEach(() => {
+    // Drain any queued ext commands to avoid polluting subsequent tests
+    app.state.extCommands.length = 0;
+  });
+
+  it("routes cdpType to extension when extension is alive", async () => {
+    app.state.extLastHeartbeat = Date.now();
+    app.state.extCommands.length = 0;
+    const promise = post("/agent/interactive", {
+      command: { action: "cdpType", selector: "#input", text: "hello" },
+      timeout: 100,
+    }, { auth: true });
+    // Wait briefly for command to be queued
+    await new Promise((r) => setTimeout(r, 30));
+    // Verify command went to extCommands, not agentCommands
+    assert.equal(app.state.extCommands.length, 1);
+    assert.equal(app.state.extCommands[0].action, "cdpType");
+    assert.equal(app.state.extCommands[0].selector, "#input");
+    assert.equal(app.state.extCommands[0].text, "hello");
+    // Let it time out
+    await promise;
+  });
+
+  it("routes cdpClick to extension when extension is alive", async () => {
+    app.state.extLastHeartbeat = Date.now();
+    app.state.extCommands.length = 0;
+    const promise = post("/agent/interactive", {
+      command: { action: "cdpClick", selector: ".btn" },
+      timeout: 100,
+    }, { auth: true });
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(app.state.extCommands.length, 1);
+    assert.equal(app.state.extCommands[0].action, "cdpClick");
+    await promise;
+  });
+
+  it("routes cdpEval to extension with awaitPromise flag", async () => {
+    app.state.extLastHeartbeat = Date.now();
+    app.state.extCommands.length = 0;
+    const promise = post("/agent/interactive", {
+      command: { action: "cdpEval", expression: "document.title", awaitPromise: true },
+      timeout: 100,
+    }, { auth: true });
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(app.state.extCommands.length, 1);
+    assert.equal(app.state.extCommands[0].action, "cdpEval");
+    assert.equal(app.state.extCommands[0].expression, "document.title");
+    assert.equal(app.state.extCommands[0].awaitPromise, true);
+    await promise;
+  });
+
+  it("routes cdpKeys to extension", async () => {
+    app.state.extLastHeartbeat = Date.now();
+    app.state.extCommands.length = 0;
+    const keys = [{ key: "ArrowDown", code: "ArrowDown", keyCode: 40 }];
+    const promise = post("/agent/interactive", {
+      command: { action: "cdpKeys", keys },
+      timeout: 100,
+    }, { auth: true });
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(app.state.extCommands.length, 1);
+    assert.equal(app.state.extCommands[0].action, "cdpKeys");
+    assert.deepEqual(app.state.extCommands[0].keys, keys);
+    await promise;
+  });
+
+  it("falls back to content script when extension is dead", async () => {
+    app.state.extLastHeartbeat = Date.now() - 60_000; // stale
+    app.state.agentTabs["cdp-tab"] = { receivedAt: Date.now() };
+    app.state.extCommands.length = 0;
+    const promise = post("/agent/interactive", {
+      tabId: "cdp-tab",
+      command: { action: "cdpType", selector: "#input", text: "hello" },
+      timeout: 100,
+    }, { auth: true });
+    await new Promise((r) => setTimeout(r, 30));
+    // Should NOT be in extCommands
+    assert.equal(app.state.extCommands.length, 0);
+    // Should be in agentCommands for the tab
+    const queued = app.state.agentCommands["cdp-tab"] || [];
+    assert.ok(queued.length >= 1);
+    assert.equal(queued[0].action, "cdpType");
+    await promise;
+  });
+
+  it("resolves CDP command when extension posts result", async () => {
+    app.state.extLastHeartbeat = Date.now();
+    app.state.extCommands.length = 0;
+    const promise = post("/agent/interactive", {
+      command: { action: "cdpEval", expression: "1+1" },
+      timeout: 5000,
+    }, { auth: true });
+    await new Promise((r) => setTimeout(r, 30));
+    const cmdId = app.state.extCommands[0]?.id;
+    assert.ok(cmdId, "command should be queued");
+    // Simulate extension posting result
+    await post("/ext/result", { id: cmdId, ok: true, value: 2 }, { auth: true });
+    const r = await promise;
+    assert.equal(r.status, 200);
+    assert.equal(r.body.ok, true);
+    assert.equal(r.body.value, 2);
+  });
+});
+
 // ── Extension endpoints ──
 
 describe("POST /ext/heartbeat", () => {
