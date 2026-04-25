@@ -131,18 +131,25 @@ A Manifest V3 Chrome extension (`extension/`) that provides the complete browser
 
 **Install**: Load `extension/` as unpacked extension in Chrome, configure API URL and key in popup.
 
-## CDP Trusted Input (v1.2.0 ext)
+## CDP Trusted Input (v1.2.0 ext, enhanced v2.2.0)
 
 The extension uses `chrome.debugger` (Chrome DevTools Protocol) to send **trusted** keyboard and mouse events that bypass `isTrusted` checks on sites like Facebook.
 
 - **`browser-cli cdp-type <selector> <text> [tabUrl]`** — Type text via CDP `Input.dispatchKeyEvent` (keyDown/char/keyUp per character). Focuses selector first, clears existing content (Ctrl+A, Backspace), then types character-by-character with 30ms delay. Uses `dispatchKeyEvent` instead of `insertText` because React controlled inputs respond to keyboard events but ignore `insertText`.
-- **`browser-cli cdp-click <selector> [tabUrl]`** — Click via CDP `Input.dispatchMouseEvent` at element center coordinates.
+- **`browser-cli cdp-click <selector> [tabUrl]`** — Click via CDP `Input.dispatchMouseEvent` at element center coordinates. Sends `mouseMoved` before press/release (required for React event delegation).
+- **`browser-cli cdp-eval <expression> [tabUrl]`** — Evaluate JS via CDP `Runtime.evaluate`. Bypasses CSP, enabling DOM inspection on Facebook, Google Photos, and other restrictive sites.
+- **`browser-cli cdp-keys <keys-json> [tabUrl]`** — Send special keystrokes (ArrowDown, Enter, Tab, Escape) via CDP `Input.dispatchKeyEvent`.
 
-**Why:** Facebook (and other sites) check `event.isTrusted` on input events. TM script synthetic events (`dispatchEvent`, `execCommand`) are marked `isTrusted: false` and get silently ignored. CDP events go through the browser's input pipeline and are treated as real user input.
+**Why:** Facebook (and other sites) check `event.isTrusted` on input events. Content script synthetic events are marked `isTrusted: false` and get silently ignored. CDP events go through the browser's input pipeline and are treated as real user input.
 
-**Architecture:** CLI sends `cdpType`/`cdpClick` action to relay server → extension polls `/ext/commands` → extension attaches `chrome.debugger` to tab, sends CDP commands, detaches. The debugger attaches/detaches per command to minimize interference.
+**Architecture:** CLI sends `cdpType`/`cdpClick`/`cdpEval`/`cdpKeys` action to relay server -> extension polls `/ext/commands` -> extension attaches `chrome.debugger` to tab, sends CDP commands, detaches. The debugger attaches/detaches per command to minimize interference.
 
-**When to use:** Use `cdp-type`/`cdp-click` on sites that block synthetic events (Facebook, sites with `isTrusted` guards). For most sites, regular `type`/`click` commands via TM script are simpler and sufficient.
+**When to use:** Use CDP commands on sites that block synthetic events (Facebook, sites with `isTrusted` guards) or CSP-restricted sites where eval is blocked. For most sites, regular `type`/`click` commands via content script are simpler and sufficient.
+
+**CDP gotchas:**
+- `keyDown` must NOT include `text` property; only `char` event should have `text`. Otherwise characters are inserted twice.
+- `cdpClick` must send `mouseMoved` before `mousePressed` for React handlers to fire on dialog items.
+- `cdpEval` returns values via `returnByValue: true`. Promises need `awaitPromise: true` (not yet exposed via CLI).
 
 ## Upload Timeout
 
