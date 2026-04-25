@@ -10,9 +10,10 @@ SSH="ssh -i $VM_KEY $VM"
 echo "=== Deploying browser-agent to VM ==="
 
 # 1. Sync files to VM + ensure cowork sessions dir
-$SSH "mkdir -p $VM_PATH /home/deployuser/cowork-sessions"
+$SSH "mkdir -p $VM_PATH/lib /home/deployuser/cowork-sessions"
 scp -i "$VM_KEY" agent-server.js package.json ecosystem.config.js .env "$VM:$VM_PATH/" 2>/dev/null || \
 scp -i "$VM_KEY" agent-server.js package.json ecosystem.config.js "$VM:$VM_PATH/"
+scp -i "$VM_KEY" lib/core.js "$VM:$VM_PATH/lib/"
 
 # 2. Install deps + restart PM2
 $SSH "cd $VM_PATH && npm install --production && pm2 delete browser-agent 2>/dev/null; pm2 start ecosystem.config.js && pm2 save"

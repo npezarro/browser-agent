@@ -1,31 +1,33 @@
 # Browser Agent
 
-Generic remote browser control system. Lets Claude CLI send commands to the user's live Edge browser via a Tampermonkey userscript.
+Generic remote browser control system. Lets Claude CLI send commands to the user's live Chrome browser via a Manifest V3 extension.
 
 ## Architecture
 
 ```
-browser-cli.sh → (HTTPS) → agent-server.js (VM:3102) → (poll) → browser-agent.user.js (Edge)
+browser-cli.sh → (HTTPS) → agent-server.js (VM:3102) → (poll) → extension/content.js (Chrome)
+                                                       → (poll) → extension/background.js (tab mgmt, CDP)
 ```
 
-- **browser-agent.user.js** — TM userscript, matches all pages, polls `/agent/commands` every 3s
+- **extension/content.js** — Content script, matches all pages, polls `/agent/commands` every 3s (replaces TM userscript as of v2.0.0)
+- **extension/background.js** — MV3 service worker for tab management, CDP trusted input, screenshots
 - **agent-server.js** — Node.js relay server, PM2 `browser-agent`, port 3102
 - **browser-cli.sh** — Bash CLI wrapper, symlinked at `~/bin/browser-cli`
-- **install.html** — Centralized TM script install page, deployed to `/var/www/html/install.html`
+- **browser-agent.user.js** — Legacy TM userscript (deprecated, kept for reference)
 
 ## Key Endpoints
 
 - `POST /agent/interactive` — Synchronous: send command, block until result (used by CLI)
-- `GET /agent/commands` — TM script polls this
-- `POST /agent/result` — TM script posts results here
+- `GET /agent/commands` — Content script polls this
+- `POST /agent/result` — Content script posts results here
 
 ## Deploy
 
 ```bash
-bash deploy.sh   # copies files to VM, restarts PM2, deploys TM script + install.html
+bash deploy.sh   # copies files to VM, restarts PM2
 ```
 
-After deploy, update the TM script in Edge (auto-update or reinstall from `pezant.ca/browser-agent.user.js`).
+After deploy, reload the extension in Chrome (`chrome://extensions` > Browser Agent > reload icon).
 
 ## Environment
 
@@ -35,11 +37,12 @@ After deploy, update the TM script in Edge (auto-update or reinstall from `pezan
 
 ## Design Decisions
 
-- **sessionStorage for tab IDs** — `GM_setValue` is shared across tabs; sessionStorage is per-tab
-- **Fire-and-forget navigation** — `navigate`/`back`/`reload` post result before executing (page unload kills the script)
-- **iframe filter** — `window.self !== window.top` check skips iframes (e.g. Walmart partytown)
+- **sessionStorage for tab IDs** — chrome.storage.local is shared across tabs; sessionStorage is per-tab
+- **Fire-and-forget navigation** — `navigate`/`back`/`reload` post result with `keepalive: true` before executing (page unload kills the content script)
+- **iframe filter** — `all_frames: false` in manifest.json prevents injection into iframes
 - **Most-recent-tab default** — When no tabId specified, server picks the tab with the latest heartbeat
 - **No hardcoded API key** — Server exits if `BROWSER_AGENT_KEY` is unset; CLI fails with clear error
+- **Content script over TM** — Eliminated Tampermonkey dependency (v2.0.0). Content scripts are injected reliably by Chrome without a third-party extension. Uses `fetch()` instead of `GM_xmlhttpRequest`, `chrome.storage.local` instead of `GM_setValue`.
 
 ## Cowork Session Capture
 
@@ -103,24 +106,30 @@ The CLI supports uploading local files to browser file inputs and drag-drop targ
 
 **CSP note:** Deepgram's console also blocks `eval`. Added to the list of CSP-restricted sites alongside Facebook and Google Photos.
 
-## Companion Extension (v2.0.0+)
+## Extension Architecture (v2.0.0+)
 
-A Manifest V3 Edge/Chrome extension (`extension/`) that provides capabilities unavailable to Tampermonkey:
+A Manifest V3 Chrome extension (`extension/`) that provides the complete browser agent:
 
+**Content script** (`content.js`) — injected into all top-level pages:
+- Polls `/agent/commands` every 3s, executes 30+ commands (click, type, setInput, upload, etc.)
+- Sends heartbeats and results to relay server
+- Replaces the former Tampermonkey userscript entirely
+
+**Background service worker** (`background.js`) — provides capabilities unavailable to content scripts:
 - **Background tab creation** — `chrome.tabs.create({active: false})` — no focus stealing
 - **Tab focus management** — `chrome.tabs.update` + `chrome.windows.update`
 - **Direct tab queries** — `chrome.tabs.query()` without heartbeat polling
+- **CDP trusted input** — `chrome.debugger` for trusted keyboard/mouse events on sites with `isTrusted` checks
+- **Screenshots** — `chrome.tabs.captureVisibleTab()`
 
-**Architecture**: Extension polls `/ext/commands` on the relay server (2s interval). Server routes tab-management commands (`openTab`, `openTabBackground`, `closeTab`, `focusTab`, `queryTabs`) to extension when connected, falls back to TM script when not.
-
-**Graceful degradation**: TM script handles `openTabBackground` as regular `openTab` (focus-stealing) when extension is absent. All existing functionality works without the extension.
+**Server routing**: Tab-management and CDP commands go to `/ext/commands` (background.js). All page-interaction commands go to `/agent/commands` (content.js).
 
 **CLI commands**:
-- `browser-cli open --bg <url>` — Open tab in background (extension)
-- `browser-cli focus <url>` — Focus existing tab by URL (extension)
+- `browser-cli open --bg <url>` — Open tab in background
+- `browser-cli focus <url>` — Focus existing tab by URL
 - `browser-cli ext-status` — Check extension connection status
 
-**Install**: Load `extension/` as unpacked extension in Edge, configure API URL and key in popup.
+**Install**: Load `extension/` as unpacked extension in Chrome, configure API URL and key in popup.
 
 ## CDP Trusted Input (v1.2.0 ext)
 
@@ -141,4 +150,4 @@ The `upload` command uses the `TIMEOUT` env var (default 120s) instead of hardco
 
 ## TM Scripts Install Page
 
-TM scripts are hosted at the server's `/tm-scripts/` path (OAuth-gated). Add new scripts to the SCRIPTS array in `tm-scripts/index.html` and SOURCES map in `sync-tm-scripts.sh`.
+TM scripts for other projects are hosted at the server's `/tm-scripts/` path (OAuth-gated). The browser-agent itself no longer uses Tampermonkey (migrated to extension content script in v2.0.0).
