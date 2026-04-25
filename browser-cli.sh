@@ -332,15 +332,14 @@ case "$cmd" in
     # Evaluate JS via CDP Runtime.evaluate (bypasses CSP)
     # Usage: cdp-eval <expression> [tabUrl] [--await]
     local_url3="" await_promise="false"
-    shift  # consume the expression arg
-    local eval_expr="$1"; shift || true
+    eval_expr="${1:?expression required}"; shift
     for arg in "$@"; do
       case "$arg" in
         --await) await_promise="true" ;;
         *) local_url3="$arg" ;;
       esac
     done
-    interactive "" "$(jq -nc --arg e "${eval_expr:?expression required}" --arg u "$local_url3" --argjson a "$await_promise" \
+    interactive "" "$(jq -nc --arg e "$eval_expr" --arg u "$local_url3" --argjson a "$await_promise" \
       'if $u != "" then {action:"cdpEval", expression:$e, url:$u, awaitPromise:$a} else {action:"cdpEval", expression:$e, awaitPromise:$a} end')"
     ;;
 
