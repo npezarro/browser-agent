@@ -328,6 +328,23 @@ case "$cmd" in
       'if $u != "" then {action:"cdpClick", selector:$s, url:$u} else {action:"cdpClick", selector:$s} end')"
     ;;
 
+  cdp-eval|ce)
+    # Evaluate JS via CDP Runtime.evaluate (bypasses CSP)
+    # Usage: cdp-eval <expression> [tabUrl]
+    local_url3="${2:-}"
+    interactive "" "$(jq -nc --arg e "${1:?expression required}" --arg u "$local_url3" \
+      'if $u != "" then {action:"cdpEval", expression:$e, url:$u} else {action:"cdpEval", expression:$e} end')"
+    ;;
+
+  cdp-keys|ck)
+    # Send special keystrokes via CDP (ArrowDown, Enter, Tab, Escape, etc.)
+    # Usage: cdp-keys <keys-json> [tabUrl]
+    # Example: cdp-keys '[{"key":"ArrowDown","code":"ArrowDown","keyCode":40},{"key":"Enter","code":"Enter","keyCode":13}]' facebook.com
+    local_url4="${2:-}"
+    interactive "" "$(jq -nc --argjson k "${1:?keys json required}" --arg u "$local_url4" \
+      'if $u != "" then {action:"cdpKeys", keys:$k, url:$u} else {action:"cdpKeys", keys:$k} end')"
+    ;;
+
   console)
     interactive "${2:-$DEFAULT_TAB}" "$(jq -nc --argjson n "${1:-50}" '{action:"getConsoleLog", count:$n}')"
     ;;
