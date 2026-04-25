@@ -10,7 +10,7 @@ Last Updated: 2026-04-25 — v2.2.0: CDP enhancements for CSP-restricted sites
 - Content script uses `fetch()` instead of `GM_xmlhttpRequest`, `chrome.storage.local` instead of `GM_setValue`
 
 ## v2.2.0 Changes (2026-04-25)
-- **`cdpEval`**: Run arbitrary JS via CDP Runtime.evaluate, bypasses CSP on FB/Google Photos/Deepgram. CLI supports `--await` flag for promise-returning expressions.
+- **`cdpEval`**: Run arbitrary JS via CDP Runtime.evaluate, bypasses CSP on FB/Google Photos/Deepgram. CLI supports `--await` flag for promise-returning expressions. (Bugfix `0eec567`: fixed double-shift in arg parsing that broke all cdp-eval calls.)
 - **`cdpKeys`**: Send special keystrokes (ArrowDown, Enter, Tab, Escape) via CDP Input.dispatchKeyEvent
 - **`mouseMoved` in CDP click**: React event delegation requires mouseMoved before mousePressed; without it, dialog items don't respond
 - **Fixed double char insertion**: CDP `keyDown` with `text` + `char` event both inserted; removed `text` from `keyDown`
