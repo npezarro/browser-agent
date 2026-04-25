@@ -381,6 +381,13 @@ async function cmdCdpClick(cmd) {
     const x = cmd.x || pos.x;
     const y = cmd.y || pos.y;
 
+    // mouseMoved first — React event delegation needs this
+    await cdp(target, "Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x,
+      y,
+    });
+    await new Promise((r) => setTimeout(r, 50));
     await cdp(target, "Input.dispatchMouseEvent", {
       type: "mousePressed",
       x,
