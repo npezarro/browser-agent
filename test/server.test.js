@@ -1,9 +1,8 @@
-const { describe, it, before, after, beforeEach } = require("node:test");
+const { describe, it, before, after, afterEach } = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("http");
 const os = require("os");
 const path = require("path");
-const fs = require("fs");
 const { createApp } = require("../agent-server");
 
 const API_KEY = "test-key-abc123";
@@ -800,7 +799,7 @@ describe("createApp", () => {
     const addr2 = app2.server.address();
 
     // State is isolated — app2 tabs should be empty even though app has tabs
-    const r = await request("GET", "/agent/tabs", { auth: true });
+    await request("GET", "/agent/tabs", { auth: true });
     // This uses app's baseUrl, so it goes to app
     const r2 = await new Promise((resolve, reject) => {
       const req = http.request({ method: "GET", hostname: "127.0.0.1", port: addr2.port, path: "/agent/tabs", headers: { authorization: "Bearer other-key" } }, (res) => {

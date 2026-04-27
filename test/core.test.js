@@ -419,9 +419,7 @@ describe("pushResult", () => {
 
   it("clears waiter timer on resolve", () => {
     const results = [];
-    let timerCleared = false;
     const timer = setTimeout(() => {}, 60000);
-    const originalClearTimeout = global.clearTimeout;
     const waiters = {
       "cmd-7": {
         resolve: () => {},
