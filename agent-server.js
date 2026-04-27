@@ -58,7 +58,6 @@ function createApp(opts = {}) {
   const resultWaiters = {};    // cmdId -> { resolve, timer }
 
   // ── Extension State ──
-  let extConnected = false;
   let extLastHeartbeat = 0;
   const EXT_TTL = 30_000;      // 30s — extension heartbeat timeout
   const extCommands = [];       // queued commands for extension
@@ -169,7 +168,7 @@ function createApp(opts = {}) {
   // ── Cowork Persistence ──
 
   function ensureDir(dir) {
-    try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+    try { fs.mkdirSync(dir, { recursive: true }); } catch { /* ignored */ }
   }
 
   function persistCoworkSession(sessionId) {
@@ -259,7 +258,7 @@ function createApp(opts = {}) {
         });
         return;
       }
-    } catch {}
+    } catch { /* ignored */ }
 
     doGitSync(sessionId);
   }
@@ -350,7 +349,7 @@ function createApp(opts = {}) {
         const tid = state.tabId || "default";
         agentTabs[tid] = { ...state, receivedAt: Date.now() };
         pruneTabs();
-      } catch {}
+      } catch { /* ignored */ }
       return json(res, { ok: true });
     }
 
@@ -361,7 +360,7 @@ function createApp(opts = {}) {
         const entry = buildLogEntry(tabId, msg, ts);
         appendLog(remoteLogs, entry, MAX_LOGS);
         console.log(`[Agent] ${msg}`);
-      } catch {}
+      } catch { /* ignored */ }
       return json(res, { ok: true });
     }
 
@@ -385,7 +384,7 @@ function createApp(opts = {}) {
         const result = await readBody(req);
         pushResult(result);
         console.log(`[Result] cmd=${result.id} ok=${result.ok}`);
-      } catch {}
+      } catch { /* ignored */ }
       return json(res, { ok: true });
     }
 
@@ -520,10 +519,9 @@ function createApp(opts = {}) {
       if (!checkAuth(req)) return json(res, { error: "Unauthorized" }, 401);
       try {
         const state = await readBody(req);
-        extConnected = true;
         extLastHeartbeat = Date.now();
         console.log(`[Ext] Heartbeat — tabs: ${state.tabCount || "?"}`);
-      } catch {}
+      } catch { /* ignored */ }
       return json(res, { ok: true });
     }
 
@@ -539,7 +537,7 @@ function createApp(opts = {}) {
         const result = await readBody(req);
         pushResult(result);
         console.log(`[Ext Result] cmd=${result.id} ok=${result.ok}`);
-      } catch {}
+      } catch { /* ignored */ }
       return json(res, { ok: true });
     }
 
@@ -559,7 +557,7 @@ function createApp(opts = {}) {
           coworkSessions[data.sessionId].lastHeartbeat = Date.now();
           coworkSessions[data.sessionId].status = data.status || "active";
         }
-      } catch {}
+      } catch { /* ignored */ }
       return json(res, { ok: true });
     }
 
@@ -643,7 +641,7 @@ function createApp(opts = {}) {
             console.log(`[Cowork] Turn ${data.turnIndex}: ${data.turn.role} (${data.turn.content.slice(0, 60)}...)`);
           }
         }
-      } catch {}
+      } catch { /* ignored */ }
       return json(res, { ok: true });
     }
 
@@ -697,7 +695,7 @@ function createApp(opts = {}) {
           console.log(`[Cowork] Pending session acknowledged: ${coworkPending.goal}`);
           coworkPending = null;
         }
-      } catch {}
+      } catch { /* ignored */ }
       return json(res, { ok: true });
     }
 

@@ -13,7 +13,6 @@ const USER_IDLE_MS = 5000;
 // ── User activity detection — pause polling during active browser use ──
 
 let lastUserActivity = 0;
-let commandActive = false;
 let activityThrottled = false;
 
 function onUserActivity() {
@@ -610,7 +609,6 @@ async function poll() {
     const data = await resp.json();
     if (!data.commands || data.commands.length === 0) return;
 
-    commandActive = true;
     for (const cmd of data.commands) {
       if (isUserActive()) {
         log(`Deferring: ${cmd.action} (user active)`);
@@ -652,7 +650,6 @@ async function poll() {
     origError("[BrowserAgent] Poll error:", err);
   } finally {
     polling = false;
-    commandActive = false;
   }
 }
 

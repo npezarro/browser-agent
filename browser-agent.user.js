@@ -32,7 +32,7 @@
 
   // ── User activity detection — pause polling during active browser use ──
   let lastUserActivity = 0; // timestamp of last mouse/keyboard/scroll event
-  let commandActive = false; // Set true when commands arrive, cleared after execution
+  // commandActive tracking removed (was write-only)
 
   // Throttled activity tracker — mousemove fires per-pixel, so we cap updates to 500ms
   let activityThrottled = false;
@@ -199,10 +199,11 @@
           result = { text: (document.body?.innerText || "").substring(0, cmd.maxLen || 5000) };
           break;
 
-        case "getHtml":
+        case "getHtml": {
           const htmlEl = cmd.selector ? document.querySelector(cmd.selector) : document.body;
           result = { html: (htmlEl?.innerHTML || "").substring(0, cmd.maxLen || 10000) };
           break;
+        }
 
         case "querySelector": {
           const el = document.querySelector(cmd.selector);
@@ -516,7 +517,7 @@
                 try { resolve(JSON.parse(resp.responseText)); }
                 catch (e) { reject(e); }
               },
-              onerror: (err) => reject(new Error("Blob fetch error")),
+              onerror: () => reject(new Error("Blob fetch error")),
               ontimeout: () => reject(new Error("Blob fetch timeout")),
               timeout: 30000,
             });
@@ -580,7 +581,6 @@
           const searchScope = cmd.scope || "*";
           const searchText = cmd.text.toLowerCase();
           let clickTarget = null;
-          let matchNum = 0;
           const targetNth = cmd.nth || 1;
 
           // Two-pass: first collect exact matches, then startsWith matches
@@ -664,7 +664,6 @@
           const data = JSON.parse(resp.responseText);
           if (!data.commands || data.commands.length === 0) return;
 
-          commandActive = true;
           for (const cmd of data.commands) {
             // If user is actively interacting, wait until they stop before executing
             // This prevents DOM commands from competing with user input
@@ -711,11 +710,11 @@
         } catch (err) {
           origError("[BrowserAgent] Poll error:", err);
         } finally {
-          commandActive = false;
+          // poll complete
         }
       },
-      onerror: () => { polling = false; commandActive = false; },
-      ontimeout: () => { polling = false; commandActive = false; },
+      onerror: () => { polling = false; },
+      ontimeout: () => { polling = false; },
     });
   }
 

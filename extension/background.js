@@ -3,7 +3,6 @@
 
 const POLL_MS = 2000;
 const HEARTBEAT_MS = 10000;
-const TAB_ID = "extension";
 
 let apiUrl = "";
 let apiKey = "";
@@ -55,7 +54,7 @@ async function sendHeartbeat() {
       connected = true;
       updateBadge();
     }
-  } catch (e) {
+  } catch (_e) {
     connected = false;
     updateBadge();
   }
