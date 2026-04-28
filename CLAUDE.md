@@ -106,6 +106,10 @@ The CLI supports uploading local files to browser file inputs and drag-drop targ
 
 **CSP note:** Deepgram's console also blocks `eval`. Added to the list of CSP-restricted sites alongside Facebook and Google Photos.
 
+## Extension Version Bumps
+
+Always increment the version in `extension/manifest.json` when making changes to extension files (content.js, background.js, popup.html, manifest.json). The user checks the version number in `chrome://extensions` after reloading to confirm the update took effect. Use semver: patch for fixes, minor for new features, major for breaking changes.
+
 ## Extension Architecture (v2.0.0+)
 
 A Manifest V3 Chrome extension (`extension/`) that provides the complete browser agent:
