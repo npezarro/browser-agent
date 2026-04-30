@@ -29,6 +29,8 @@ bash deploy.sh   # copies files to VM, restarts PM2
 
 After deploy, reload the extension in Chrome (`chrome://extensions` > Browser Agent > reload icon).
 
+**Version bump:** Always increment the version in `extension/manifest.json` when changing extension files (background.js, content.js, popup.html). The user checks the version number in chrome://extensions after reloading to confirm the new code loaded. Use semver: patch for fixes, minor for new features.
+
 ## Environment
 
 - `BROWSER_AGENT_KEY` — Required. API key for auth. Set in `.env` on VM and `~/.bashrc` locally.
