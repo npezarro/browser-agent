@@ -457,7 +457,7 @@ json.dump({'blobId': sys.argv[2], 'base64': b64, 'filename': sys.argv[3], 'mimet
 
   cowork-capture|cwcap)
     # Run the PowerShell capture daemon (scrapes Cowork panel via CDP)
-    local_ps_path='\\wsl.localhost\Ubuntu\home\npezarro\repos\cowork-bridge\capture-daemon.ps1'
+    local_ps_path="${COWORK_CAPTURE_PS1:-\\\\wsl.localhost\\Ubuntu\\$HOME/repos/cowork-bridge/capture-daemon.ps1}"
     case "${1:-}" in
       --watch|-w)
         powershell.exe -ExecutionPolicy Bypass -File "$local_ps_path" -Watch -Interval "${2:-30}"
@@ -578,8 +578,11 @@ json.dump({'blobId': sys.argv[2], 'base64': b64, 'filename': sys.argv[3], 'mimet
     mkdir -p "$local_cowork_dir/$local_today"
 
     # Pull markdown files from VM
-    scp -i "$HOME/.ssh/vm_key" \
-      "deployuser@pezant.ca:/home/deployuser/cowork-sessions/$local_today/*.md" \
+    local vm="${BROWSER_AGENT_VM:?Set BROWSER_AGENT_VM}"
+    local vm_key="${BROWSER_AGENT_VM_KEY:-$HOME/.ssh/vm_key}"
+    local vm_user; vm_user=$(echo "$vm" | cut -d@ -f1)
+    scp -i "$vm_key" \
+      "$vm:/home/$vm_user/cowork-sessions/$local_today/*.md" \
       "$local_cowork_dir/$local_today/" 2>/dev/null || echo "No sessions to sync for $local_today"
 
     # Git commit if in repo

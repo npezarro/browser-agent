@@ -41,11 +41,10 @@ Last Updated: 2026-04-25 — v2.2.0: CDP enhancements for CSP-restricted sites
 - **Process manager:** PM2 (`browser-agent`)
 - **Port:** 3102 (behind Apache at /api/browser-agent/)
 - **Browser:** Chrome (extension loaded from Windows path, not WSL)
-- **Extension path:** `/path/to/browser-agent/extension/`
+- **Extension path:** Load `extension/` as unpacked in Chrome
 - **Extension reload:** `chrome://extensions` > Browser Agent > reload icon
 - **After WSL changes:** Must `git push` from WSL, then `git pull` in Windows repo
 
-Full session closeout: privateContext/deliverables/closeouts/2026-04-25-browser-agent-cdp-enhancements.md
 
 ## Active Branch
 `master`

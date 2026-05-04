@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VM="deployuser@pezant.ca"
-VM_KEY="$HOME/.ssh/vm_key"
+VM="${BROWSER_AGENT_VM:?Set BROWSER_AGENT_VM (e.g. user@host)}"
+VM_KEY="${BROWSER_AGENT_VM_KEY:-$HOME/.ssh/vm_key}"
 SSH_CMD="ssh -i $VM_KEY $VM"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 STAGING="/tmp/tm-scripts-staging"
 
-echo "=== Syncing TM Scripts to pezant.ca/tm-scripts/ ==="
+VM_HOST=$(echo "$VM" | cut -d@ -f2)
+echo "=== Syncing TM Scripts to $VM_HOST/tm-scripts/ ==="
 
 rm -rf "$STAGING" && mkdir -p "$STAGING"
 
@@ -79,4 +80,4 @@ $SSH_CMD "rm -rf /tmp/tm-scripts-upload"
 rm -rf "$STAGING"
 
 echo ""
-echo "=== Done! Visit https://pezant.ca/tm-scripts/ ==="
+echo "=== Done! Visit https://$VM_HOST/tm-scripts/ ==="

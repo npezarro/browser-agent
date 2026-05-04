@@ -39,8 +39,9 @@ const {
  */
 function createApp(opts = {}) {
   const API_KEY = opts.apiKey;
-  const COWORK_DIR = opts.coworkDir || "/home/deployuser/cowork-sessions";
-  const COWORK_REPO = opts.coworkRepo || "/home/deployuser/my-claude-cowork";
+  const homeDir = process.env.HOME || "/tmp";
+  const COWORK_DIR = opts.coworkDir || `${homeDir}/cowork-sessions`;
+  const COWORK_REPO = opts.coworkRepo || `${homeDir}/my-claude-cowork`;
   const COWORK_WEBHOOK = opts.coworkWebhook || "";
 
   // ── State ──
@@ -252,7 +253,8 @@ function createApp(opts = {}) {
     try {
       if (!fs.existsSync(pathMod.join(COWORK_REPO, ".git"))) {
         console.log(`[Cowork] Git repo not found at ${COWORK_REPO}, cloning...`);
-        execFile("git", ["clone", "https://github.com/npezarro/my-claude-cowork.git", COWORK_REPO], (err) => {
+        const coworkRepoUrl = process.env.COWORK_REPO_URL || `https://github.com/${process.env.GITHUB_USER || "npezarro"}/my-claude-cowork.git`;
+        execFile("git", ["clone", coworkRepoUrl, COWORK_REPO], (err) => {
           if (err) console.error(`[Cowork] Git clone failed: ${err.message}`);
           else doGitSync(sessionId);
         });
