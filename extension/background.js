@@ -237,16 +237,27 @@ async function resolveTabId(cmd) {
     );
     if (match) return match.id;
   }
-  // Fallback: active tab
+  // Fallback: active tab (only HTTP/HTTPS — chrome:// tabs can't be debugged)
   const [active] = await chrome.tabs.query({
     active: true,
     currentWindow: true,
+    url: ["http://*/*", "https://*/*"],
   });
   return active?.id;
 }
 
 // Attach debugger, run fn, detach
 async function withDebugger(tabId, fn) {
+  if (!tabId) return { error: "No debuggable tab found. Specify a target URL or ensure an HTTP/HTTPS tab is active." };
+  // Validate tab URL is debuggable (chrome://, about:, edge:// cannot be debugged)
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.url && /^(chrome|chrome-extension|about|edge):/.test(tab.url)) {
+      return { error: `Cannot debug internal browser page (${tab.url}). Navigate to an HTTP/HTTPS page first.` };
+    }
+  } catch (e) {
+    return { error: `Tab ${tabId} not found: ${e.message}` };
+  }
   const target = { tabId };
   await chrome.debugger.attach(target, "1.3");
   try {
