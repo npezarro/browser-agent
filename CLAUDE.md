@@ -158,6 +158,17 @@ The extension uses `chrome.debugger` (Chrome DevTools Protocol) to send **truste
 
 The `upload` command uses the `TIMEOUT` env var (default 120s) instead of hardcoded timeout. Set `TIMEOUT=300 browser-cli upload ...` for large files.
 
+## Site Compatibility Notes
+
+### Reddit
+New Reddit (reddit.com) uses Web Components with closed shadow DOM. Content script selectors cannot pierce the shadow boundary, and even CDP interactions are unreliable due to the component architecture. **Use old.reddit.com** for all Reddit automation:
+- old.reddit.com uses standard HTML forms (textareas, buttons)
+- `cdp-type` does not work on old Reddit textareas (use `cdp-eval` with direct `.value` assignment + dispatch `input` event)
+- `cdp-click` has viewport calculation issues on old Reddit (use `cdp-eval` with `element.click()`)
+- Navigate via `cdp-eval` with `window.location.assign()`, not the `navigate` command (content script timeouts on Reddit)
+
+Consumer: `reddit-referral-poster`
+
 ## TM Scripts Install Page
 
 TM scripts for other projects are hosted at the server's `/tm-scripts/` path (OAuth-gated). The browser-agent itself no longer uses Tampermonkey (migrated to extension content script in v2.0.0).
