@@ -1,6 +1,6 @@
 # context.md — browser-agent
 
-Last Updated: 2026-04-25 — v2.2.0: CDP enhancements for CSP-restricted sites
+Last Updated: 2026-05-05 — Public release: scrubbed infrastructure details, rewrote git history
 
 ## Current State
 - **Extension v2.2.0** — MV3 content script + background service worker
@@ -45,6 +45,16 @@ Last Updated: 2026-04-25 — v2.2.0: CDP enhancements for CSP-restricted sites
 - **Extension reload:** `chrome://extensions` > Browser Agent > reload icon
 - **After WSL changes:** Must `git push` from WSL, then `git pull` in Windows repo
 
+
+## 2026-05-05 — Public Release
+- Repo flipped from private to public
+- Scrubbed all hardcoded SSH usernames, VM paths, Windows paths, alumni email from working tree and git history
+- Deploy scripts now use `$BROWSER_AGENT_VM` env var instead of hardcoded connection strings
+- `agent-server.js` cowork paths default to `$HOME/` instead of hardcoded user dir
+- Git history rewritten via `git filter-repo --replace-text` (all 78 commits preserved, hashes changed)
+- Open: add `export BROWSER_AGENT_VM=...` to `.bashrc`; consider adding a README.md
+
+Full session closeout: privateContext/deliverables/closeouts/2026-05-05-browser-agent-public-release.md
 
 ## Active Branch
 `master`

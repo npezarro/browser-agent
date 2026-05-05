@@ -1,5 +1,13 @@
 # progress.md — browser-agent
 
+## 2026-05-05 — Public Release
+- 467ad49 — Scrub hardcoded infrastructure details for public release
+  - Parameterized deploy.sh, sync-tm-scripts.sh, browser-cli.sh with env vars
+  - agent-server.js cowork paths use $HOME instead of hardcoded user dir
+  - Cleaned context.md of Windows paths and privateContext references
+  - Git history rewritten via filter-repo (generatedByTermius -> deployuser, email normalized)
+  - Repo visibility flipped to public
+
 ## 2026-04-10 — v1.8.0 Performance Fixes
 - 8645c0a — Fix memory leaks and reduce DOM polling to prevent Edge hangs
   - Merged two polling loops into single 3s tick
