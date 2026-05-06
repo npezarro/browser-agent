@@ -37,9 +37,9 @@ Last Updated: 2026-05-05 — CDP eval fix (v2.2.1), hotel availability research
 - **Always bump manifest version** on extension changes for easy visual verification after reload.
 
 ## Environment Notes
-- **Deploy target:** VM (pezant.ca)
+- **Deploy target:** See `deploy.sh` and `BROWSER_AGENT_VM` env var
 - **Process manager:** PM2 (`browser-agent`)
-- **Port:** 3102 (behind Apache at /api/browser-agent/)
+- **Port:** Configured via `BROWSER_AGENT_PORT` env var (see CLAUDE.md)
 - **Browser:** Chrome (extension loaded from Windows path, not WSL)
 - **Extension path:** Load `extension/` as unpacked in Chrome
 - **Extension reload:** `chrome://extensions` > Browser Agent > reload icon
