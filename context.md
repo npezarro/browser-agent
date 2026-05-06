@@ -1,9 +1,9 @@
 # context.md — browser-agent
 
-Last Updated: 2026-05-05 — Public release: scrubbed infrastructure details, rewrote git history
+Last Updated: 2026-05-05 — CDP eval fix (v2.2.1), hotel availability research
 
 ## Current State
-- **Extension v2.2.0** — MV3 content script + background service worker
+- **Extension v2.2.1** — MV3 content script + background service worker
 - Server running via PM2 (`browser-agent`) on port 3102
 - 30+ commands: navigate, click, type, setInput, fill, upload, clickAny, wait-for, assert, etc.
 - Background service worker handles tab management, CDP trusted input, screenshots, JS eval (bypasses CSP)
@@ -45,6 +45,16 @@ Last Updated: 2026-05-05 — Public release: scrubbed infrastructure details, re
 - **Extension reload:** `chrome://extensions` > Browser Agent > reload icon
 - **After WSL changes:** Must `git push` from WSL, then `git pull` in Windows repo
 
+
+## 2026-05-05 — v2.2.1 CDP Eval Fix
+- Fixed "Cannot access a chrome:// URL" error in CDP eval commands
+- `resolveTabId()` fallback now filters to HTTP/HTTPS tabs only (was falling back to chrome:// tabs which can't be debugged)
+- `withDebugger()` validates tab URL before attaching debugger, returns clear error for internal pages
+- Verified working: CDP eval successfully reads hotel site content (Hilton), types into search fields, extracts structured pricing data
+- Windows extension path confirmed: `/mnt/c/Users/npeza/Documents/repos/browser-agent/extension/`
+- After WSL changes, must `git pull` in Windows repo (or `git reset --hard origin/master` if diverged) then reload extension
+
+Full session closeout: privateContext/deliverables/closeouts/2026-05-05-browser-agent-cdp-fix-hotel-research.md
 
 ## 2026-05-05 — Public Release
 - Repo flipped from private to public

@@ -1,5 +1,12 @@
 # progress.md — browser-agent
 
+## 2026-05-05 — v2.2.1 CDP Eval Fix
+- b173dd7 — Fix CDP eval "Cannot access chrome:// URL" error
+  - resolveTabId() fallback filters to HTTP/HTTPS tabs only
+  - withDebugger() validates tab URL before attach, clear error for internal pages
+  - Manifest version bumped 2.2.0 -> 2.2.1
+  - Tested: CDP eval on Hilton hotel sites, typed into search fields, extracted room pricing
+
 ## 2026-05-05 — Public Release
 - 467ad49 — Scrub hardcoded infrastructure details for public release
   - Parameterized deploy.sh, sync-tm-scripts.sh, browser-cli.sh with env vars
