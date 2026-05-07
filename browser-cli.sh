@@ -38,6 +38,7 @@
 #   errors [tabId]                Get network/console errors
 #   logs [since]                  Get agent logs
 #   health                        Server health check
+#   network-capture <pattern> [tabUrl]  Capture XHR responses matching URL pattern
 #   click-any <"text"> [tabId]       Click any element with matching text (wider than click)
 #   upload <selector> <filepath> [tabId] [--drag-drop]  Upload file to input
 #   ping [tabId]                  Ping browser agent
@@ -330,17 +331,20 @@ case "$cmd" in
 
   cdp-eval|ce)
     # Evaluate JS via CDP Runtime.evaluate (bypasses CSP)
-    # Usage: cdp-eval <expression> [tabUrl] [--await]
-    local_url3="" await_promise="false"
+    # Usage: cdp-eval <expression> [tabUrl] [--await] [--focus] [--scroll]
+    local_url3="" await_promise="false" focus_tab="false" scroll_page="false"
     eval_expr="${1:?expression required}"; shift
     for arg in "$@"; do
       case "$arg" in
         --await) await_promise="true" ;;
+        --focus) focus_tab="true" ;;
+        --scroll) scroll_page="true" ;;
         *) local_url3="$arg" ;;
       esac
     done
-    interactive "" "$(jq -nc --arg e "$eval_expr" --arg u "$local_url3" --argjson a "$await_promise" \
-      'if $u != "" then {action:"cdpEval", expression:$e, url:$u, awaitPromise:$a} else {action:"cdpEval", expression:$e, awaitPromise:$a} end')"
+    interactive "" "$(jq -nc --arg e "$eval_expr" --arg u "$local_url3" \
+      --argjson a "$await_promise" --argjson f "$focus_tab" --argjson s "$scroll_page" \
+      '{action:"cdpEval", expression:$e, awaitPromise:$a, focus:$f, scroll:$s} + if $u != "" then {url:$u} else {} end')"
     ;;
 
   cdp-keys|ck)
@@ -350,6 +354,26 @@ case "$cmd" in
     local_url4="${2:-}"
     interactive "" "$(jq -nc --argjson k "${1:?keys json required}" --arg u "$local_url4" \
       'if $u != "" then {action:"cdpKeys", keys:$k, url:$u} else {action:"cdpKeys", keys:$k} end')"
+    ;;
+
+  network-capture|nc)
+    # Capture network responses matching a URL pattern via CDP
+    # Usage: network-capture <urlPattern> [tabUrl] [--timeout N] [--max-len N]
+    local_pattern="${1:?url pattern required}"; shift
+    local_nc_url="" nc_timeout=30000 nc_maxlen=100000
+    for arg in "$@"; do
+      case "$arg" in
+        --timeout) shift_next="timeout" ;;
+        --max-len) shift_next="maxlen" ;;
+        *)
+          if [ "${shift_next:-}" = "timeout" ]; then nc_timeout="$arg"; shift_next=""
+          elif [ "${shift_next:-}" = "maxlen" ]; then nc_maxlen="$arg"; shift_next=""
+          else local_nc_url="$arg"; fi ;;
+      esac
+    done
+    TIMEOUT=$((nc_timeout / 1000 + 15)) interactive "" "$(jq -nc --arg p "$local_pattern" --arg u "$local_nc_url" \
+      --argjson t "$nc_timeout" --argjson m "$nc_maxlen" \
+      '{action:"cdpNetworkCapture", urlPattern:$p, timeout:$t, maxLen:$m} + if $u != "" then {url:$u} else {} end')"
     ;;
 
   console)

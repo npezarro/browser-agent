@@ -115,6 +115,9 @@ async function executeCommand(cmd) {
       case "cdpKeys":
         result = await cmdCdpKeys(cmd);
         break;
+      case "cdpNetworkCapture":
+        result = await cmdCdpNetworkCapture(cmd);
+        break;
       default:
         result = { error: `Unknown extension command: ${cmd.action}` };
     }
@@ -160,7 +163,7 @@ async function cmdFocusTab(cmd) {
   let tabId = cmd.chromeTabId;
   if (!tabId && cmd.url) {
     const tabs = await chrome.tabs.query({});
-    const match = tabs.find((t) => t.url && t.url.startsWith(cmd.url));
+    const match = tabs.find((t) => t.url && t.url.includes(cmd.url));
     if (match) tabId = match.id;
   }
   if (!tabId) return { focused: false, error: "Tab not found" };
@@ -427,7 +430,43 @@ async function cmdCdpEval(cmd) {
   const tabId = await resolveTabId(cmd);
   if (!tabId) return { error: "Tab not found" };
 
+  // Focus the tab before eval (needed for virtual rendering / IntersectionObserver)
+  if (cmd.focus) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      await chrome.tabs.update(tabId, { active: true });
+      await chrome.windows.update(tab.windowId, { focused: true });
+      await new Promise((r) => setTimeout(r, cmd.focusDelay || 1500));
+    } catch (_) { /* best effort */ }
+  }
+
   return withDebugger(tabId, async (target) => {
+    // Progressive scroll to trigger IntersectionObserver-based virtual rendering
+    if (cmd.scroll) {
+      const steps = cmd.scrollSteps || 6;
+      const stepPx = cmd.scrollStep || 600;
+      const delay = cmd.scrollDelay || 400;
+      for (let i = 0; i <= steps; i++) {
+        await cdp(target, "Runtime.evaluate", {
+          expression: `window.scrollTo(0, ${i * stepPx})`,
+          returnByValue: true,
+        });
+        // Force paint via double-rAF
+        await cdp(target, "Runtime.evaluate", {
+          expression: "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))",
+          returnByValue: true,
+          awaitPromise: true,
+        });
+        await new Promise((r) => setTimeout(r, delay));
+      }
+      // Scroll back to top
+      await cdp(target, "Runtime.evaluate", {
+        expression: "window.scrollTo(0, 0)",
+        returnByValue: true,
+      });
+      await new Promise((r) => setTimeout(r, 300));
+    }
+
     const result = await cdp(target, "Runtime.evaluate", {
       expression: cmd.expression,
       returnByValue: true,
@@ -468,6 +507,93 @@ async function cmdCdpKeys(cmd) {
     }
     return { sent: true, count: cmd.keys.length };
   });
+}
+
+/**
+ * Capture network responses matching a URL pattern via CDP Network domain.
+ * Bypasses virtual rendering entirely by intercepting the raw API response.
+ *
+ * cmd: { url?, chromeTabId?, urlPattern, reload?, timeout?, maxLen?, maxCaptures? }
+ */
+async function cmdCdpNetworkCapture(cmd) {
+  const tabId = await resolveTabId(cmd);
+  if (!tabId) return { error: "Tab not found" };
+
+  // Focus tab first
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    await chrome.tabs.update(tabId, { active: true });
+    await chrome.windows.update(tab.windowId, { focused: true });
+  } catch (_) { /* best effort */ }
+
+  const target = { tabId };
+  await chrome.debugger.attach(target, "1.3");
+
+  try {
+    await cdp(target, "Network.enable", {});
+
+    const captured = [];
+    const urlPattern = cmd.urlPattern || "";
+    const timeout = cmd.timeout || 30000;
+    const maxCaptures = cmd.maxCaptures || 1;
+    const maxLen = cmd.maxLen || 100000;
+
+    const responsePromise = new Promise((resolve) => {
+      const pendingRequests = new Map();
+
+      const onEvent = (source, method, params) => {
+        if (source.tabId !== tabId) return;
+
+        if (method === "Network.responseReceived") {
+          const respUrl = params.response.url;
+          if (respUrl.includes(urlPattern)) {
+            pendingRequests.set(params.requestId, respUrl);
+          }
+        }
+
+        if (method === "Network.loadingFinished") {
+          const reqUrl = pendingRequests.get(params.requestId);
+          if (reqUrl) {
+            pendingRequests.delete(params.requestId);
+            cdp(target, "Network.getResponseBody", { requestId: params.requestId })
+              .then((body) => {
+                captured.push({
+                  url: reqUrl,
+                  body: (body.body || "").substring(0, maxLen),
+                  base64Encoded: body.base64Encoded,
+                  size: (body.body || "").length,
+                });
+                if (captured.length >= maxCaptures) {
+                  chrome.debugger.onEvent.removeListener(onEvent);
+                  resolve(captured);
+                }
+              })
+              .catch(() => {
+                pendingRequests.delete(params.requestId);
+              });
+          }
+        }
+      };
+
+      chrome.debugger.onEvent.addListener(onEvent);
+
+      setTimeout(() => {
+        chrome.debugger.onEvent.removeListener(onEvent);
+        resolve(captured);
+      }, timeout);
+    });
+
+    // Reload page to trigger network requests
+    if (cmd.reload !== false) {
+      await new Promise((r) => setTimeout(r, 500));
+      await cdp(target, "Page.reload", {});
+    }
+
+    const results = await responsePromise;
+    return { captured: results.length, responses: results };
+  } finally {
+    await chrome.debugger.detach(target).catch(() => {});
+  }
 }
 
 // --- Badge ---
