@@ -440,7 +440,22 @@ async function cmdCdpEval(cmd) {
     } catch (_) { /* best effort */ }
   }
 
-  return withDebugger(tabId, async (target) => {
+  // Use manual debugger management with guaranteed cleanup timeout
+  const target = { tabId };
+  await chrome.debugger.attach(target, "1.3");
+
+  // Self-timeout to guarantee detach even if server times out first
+  const selfTimeout = cmd.focus || cmd.scroll ? 25000 : 15000;
+  let detached = false;
+  const cleanup = () => {
+    if (!detached) {
+      detached = true;
+      chrome.debugger.detach(target).catch(() => {});
+    }
+  };
+  const safetyTimer = setTimeout(cleanup, selfTimeout);
+
+  try {
     // Progressive scroll to trigger IntersectionObserver-based virtual rendering
     if (cmd.scroll) {
       const steps = cmd.scrollSteps || 6;
@@ -476,7 +491,10 @@ async function cmdCdpEval(cmd) {
       return { error: result.exceptionDetails.text || "Eval error" };
     }
     return { value: result.result.value };
-  });
+  } finally {
+    clearTimeout(safetyTimer);
+    cleanup();
+  }
 }
 
 /**
