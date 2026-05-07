@@ -496,6 +496,39 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ sent: true });
     return false;
   }
+
+  // CSP eval fallback — content script delegates eval to background via CDP
+  if (request.type === "ba-eval-fallback" && sender.tab?.id) {
+    const tabId = sender.tab.id;
+    (async () => {
+      try {
+        const target = { tabId };
+        await chrome.debugger.attach(target, "1.3");
+        try {
+          const evalResult = await chrome.debugger.sendCommand(target, "Runtime.evaluate", {
+            expression: `(() => { ${request.code} })()`,
+            returnByValue: true,
+            awaitPromise: true,
+          });
+          if (evalResult.exceptionDetails) {
+            sendResponse({ error: evalResult.exceptionDetails.text || "CDP eval error" });
+          } else {
+            const v = evalResult.result.value;
+            if (typeof v === "object" && v !== null) {
+              sendResponse({ value: JSON.stringify(v).substring(0, request.maxLen || 5000) });
+            } else {
+              sendResponse({ value: v });
+            }
+          }
+        } finally {
+          await chrome.debugger.detach(target).catch(() => {});
+        }
+      } catch (e) {
+        sendResponse({ error: e.message });
+      }
+    })();
+    return true; // async sendResponse
+  }
 });
 
 // --- Lifecycle ---

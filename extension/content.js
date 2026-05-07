@@ -336,14 +336,41 @@ async function execCommand(cmd) {
       }
 
       case "eval": {
-        const fn = new Function("document", "window", cmd.code);
-        const evalResult = await fn(document, window);
-        if (typeof evalResult === "undefined") {
-          result = { value: "undefined" };
-        } else if (typeof evalResult === "object") {
-          result = { value: JSON.stringify(evalResult).substring(0, cmd.maxLen || 5000) };
-        } else {
-          result = { value: String(evalResult).substring(0, cmd.maxLen || 5000) };
+        try {
+          const fn = new Function("document", "window", cmd.code);
+          const evalResult = await fn(document, window);
+          if (typeof evalResult === "undefined") {
+            result = { value: "undefined" };
+          } else if (typeof evalResult === "object") {
+            result = { value: JSON.stringify(evalResult).substring(0, cmd.maxLen || 5000) };
+          } else {
+            result = { value: String(evalResult).substring(0, cmd.maxLen || 5000) };
+          }
+        } catch (evalErr) {
+          if (evalErr instanceof EvalError || evalErr.message?.includes("Content Security Policy")) {
+            // CSP blocks eval in content script — fall back to CDP via background
+            log("eval blocked by CSP, falling back to CDP");
+            const cdpResult = await new Promise((resolve) => {
+              chrome.runtime.sendMessage(
+                { type: "ba-eval-fallback", code: cmd.code, maxLen: cmd.maxLen },
+                (resp) => resolve(resp || { error: "No response from background" })
+              );
+            });
+            if (cdpResult.error) {
+              result = { value: null, error: cdpResult.error, fallback: "cdp" };
+            } else {
+              const v = cdpResult.value;
+              if (typeof v === "undefined" || v === undefined) {
+                result = { value: "undefined", fallback: "cdp" };
+              } else if (typeof v === "object") {
+                result = { value: JSON.stringify(v).substring(0, cmd.maxLen || 5000), fallback: "cdp" };
+              } else {
+                result = { value: String(v).substring(0, cmd.maxLen || 5000), fallback: "cdp" };
+              }
+            }
+          } else {
+            throw evalErr;
+          }
         }
         break;
       }
