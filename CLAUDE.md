@@ -31,6 +31,12 @@ After deploy, reload the extension in Chrome (`chrome://extensions` > Browser Ag
 
 **Version bump:** Always increment the version in `extension/manifest.json` when changing extension files (background.js, content.js, popup.html). The user checks the version number in chrome://extensions after reloading to confirm the new code loaded. Use semver: patch for fixes, minor for new features.
 
+**CRITICAL: Extension lives on Windows filesystem.** Chrome loads the extension from `C:\Users\npeza\Documents\repos\browser-agent\extension\` (WSL path: `/mnt/c/Users/npeza/Documents/repos/browser-agent/extension/`). After changing extension files in WSL, you MUST:
+1. `git push` from WSL
+2. `cd /mnt/c/Users/npeza/Documents/repos/browser-agent && git pull`
+3. Then ask user to reload the extension
+Skipping step 2 means Chrome still sees the old code.
+
 ## Environment
 
 - `BROWSER_AGENT_KEY` — Required. API key for auth. Set in `.env` on VM and `~/.bashrc` locally.
