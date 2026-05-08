@@ -545,10 +545,12 @@ async function cmdCdpNetworkCapture(cmd) {
     await cdp(target, "Network.enable", {});
 
     const captured = [];
+    const allUrls = [];
     const urlPattern = cmd.urlPattern || "";
     const timeout = cmd.timeout || 30000;
     const maxCaptures = cmd.maxCaptures || 1;
     const maxLen = cmd.maxLen || 100000;
+    const listOnly = cmd.listUrls || false;
 
     const responsePromise = new Promise((resolve) => {
       const pendingRequests = new Map();
@@ -558,12 +560,16 @@ async function cmdCdpNetworkCapture(cmd) {
 
         if (method === "Network.responseReceived") {
           const respUrl = params.response.url;
+          const mimeType = params.response.mimeType || "";
+          if (listOnly) {
+            allUrls.push({ url: respUrl.substring(0, 300), type: params.type, mime: mimeType, status: params.response.status });
+          }
           if (respUrl.includes(urlPattern)) {
             pendingRequests.set(params.requestId, respUrl);
           }
         }
 
-        if (method === "Network.loadingFinished") {
+        if (method === "Network.loadingFinished" && !listOnly) {
           const reqUrl = pendingRequests.get(params.requestId);
           if (reqUrl) {
             pendingRequests.delete(params.requestId);
@@ -591,7 +597,7 @@ async function cmdCdpNetworkCapture(cmd) {
 
       setTimeout(() => {
         chrome.debugger.onEvent.removeListener(onEvent);
-        resolve(captured);
+        resolve(listOnly ? allUrls : captured);
       }, timeout);
     });
 
@@ -602,7 +608,9 @@ async function cmdCdpNetworkCapture(cmd) {
     }
 
     const results = await responsePromise;
-    return { captured: results.length, responses: results };
+    return listOnly
+      ? { urlCount: results.length, urls: results }
+      : { captured: results.length, responses: results };
   } finally {
     await chrome.debugger.detach(target).catch(() => {});
   }

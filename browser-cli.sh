@@ -358,13 +358,14 @@ case "$cmd" in
 
   network-capture|nc)
     # Capture network responses matching a URL pattern via CDP
-    # Usage: network-capture <urlPattern> [tabUrl] [--timeout N] [--max-len N]
+    # Usage: network-capture <urlPattern> [tabUrl] [--timeout N] [--max-len N] [--list]
     local_pattern="${1:?url pattern required}"; shift
-    local_nc_url="" nc_timeout=30000 nc_maxlen=100000
+    local_nc_url="" nc_timeout=30000 nc_maxlen=100000 nc_list="false"
     for arg in "$@"; do
       case "$arg" in
         --timeout) shift_next="timeout" ;;
         --max-len) shift_next="maxlen" ;;
+        --list) nc_list="true" ;;
         *)
           if [ "${shift_next:-}" = "timeout" ]; then nc_timeout="$arg"; shift_next=""
           elif [ "${shift_next:-}" = "maxlen" ]; then nc_maxlen="$arg"; shift_next=""
@@ -372,8 +373,8 @@ case "$cmd" in
       esac
     done
     TIMEOUT=$((nc_timeout / 1000 + 15)) interactive "" "$(jq -nc --arg p "$local_pattern" --arg u "$local_nc_url" \
-      --argjson t "$nc_timeout" --argjson m "$nc_maxlen" \
-      '{action:"cdpNetworkCapture", urlPattern:$p, timeout:$t, maxLen:$m} + if $u != "" then {url:$u} else {} end')"
+      --argjson t "$nc_timeout" --argjson m "$nc_maxlen" --argjson l "$nc_list" \
+      '{action:"cdpNetworkCapture", urlPattern:$p, timeout:$t, maxLen:$m, listUrls:$l} + if $u != "" then {url:$u} else {} end')"
     ;;
 
   console)
