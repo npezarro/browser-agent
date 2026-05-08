@@ -460,17 +460,11 @@ async function cmdCdpEval(cmd) {
     if (cmd.scroll) {
       const steps = cmd.scrollSteps || 6;
       const stepPx = cmd.scrollStep || 600;
-      const delay = cmd.scrollDelay || 400;
+      const delay = cmd.scrollDelay || 300;
       for (let i = 0; i <= steps; i++) {
         await cdp(target, "Runtime.evaluate", {
           expression: `window.scrollTo(0, ${i * stepPx})`,
           returnByValue: true,
-        });
-        // Force paint via double-rAF
-        await cdp(target, "Runtime.evaluate", {
-          expression: "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))",
-          returnByValue: true,
-          awaitPromise: true,
         });
         await new Promise((r) => setTimeout(r, delay));
       }
