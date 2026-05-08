@@ -159,6 +159,19 @@ The extension uses `chrome.debugger` (Chrome DevTools Protocol) to send **truste
 - `cdpClick` must send `mouseMoved` before `mousePressed` for React handlers to fire on dialog items.
 - **`cdpClick` (Input.dispatchMouseEvent) does NOT trigger FB React handlers on comboboxes.** For FB form controls (category, condition dropdowns), use `element.click()` via `cdpEval` instead. This is a fundamental React event delegation issue on Facebook specifically.
 - `cdpEval` returns values via `returnByValue: true`. Promises supported via `--await` flag: `browser-cli cdp-eval "expr" url --await`.
+- **Never use `requestAnimationFrame` in CDP scroll sequences.** rAF promises never resolve on unfocused or un-painted tabs, causing the entire cdpEval to hang until the safety timer fires. Use `setTimeout` delays between scroll steps instead.
+- **Debugger leak on timeout:** When using `--focus` or `--scroll` with cdpEval, the debugger lifecycle is managed manually (not via `withDebugger` helper) with a 55s safety timer that guarantees `chrome.debugger.detach` even if the server-side timeout fires first. This prevents "Another debugger is already attached" errors.
+
+## Virtual Rendering (v2.4.0+)
+
+SPAs that use IntersectionObserver-based lazy rendering (e.g., Amex Travel) require the tab to be focused and scrolled before content appears in the DOM.
+
+- **`browser-cli cdp-eval <expr> <url> --focus --scroll`** — Focus the tab and progressively scroll the page before evaluating the expression. Forces virtual content to render by triggering IntersectionObserver callbacks. Uses `setTimeout` delays between scroll steps (not rAF).
+- **`browser-cli network-capture <urlPattern> [tabUrl]`** — Intercept XHR/fetch responses via CDP Network domain. Captures response bodies matching a URL pattern after triggering a page reload. Bypasses DOM rendering entirely when the data is available via API.
+- **`browser-cli network-capture --list [tabUrl]`** — Discover all network response URLs (with type, mime, status) without fetching bodies. Use to find API endpoints before targeted capture.
+- **`browser-cli extract-virtual [tabUrl]`** — Tries 10 extraction approaches in sequence, returning the first that yields data: (1) direct DOM read, (2) progressive scroll+extract, (3) screenshot force-paint, (4) scrollIntoView on child cards, (5) MutationObserver wait, (6) container innerText fallback, (7) fetch monkey-patch, (8) `__NEXT_DATA__` SSR extraction, (9) XHR intercept, (10) full body text. Focuses tab via `chrome.tabs` API first. 55s safety timer guarantees debugger cleanup.
+
+**focusTab URL matching:** Uses `.includes()` (not `.startsWith()`) so bare domain names match actual tab URLs that include the protocol prefix.
 
 ## Upload Timeout
 
