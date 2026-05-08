@@ -118,6 +118,9 @@ async function executeCommand(cmd) {
       case "cdpNetworkCapture":
         result = await cmdCdpNetworkCapture(cmd);
         break;
+      case "extractVirtual":
+        result = await cmdExtractVirtual(cmd);
+        break;
       default:
         result = { error: `Unknown extension command: ${cmd.action}` };
     }
@@ -613,6 +616,230 @@ async function cmdCdpNetworkCapture(cmd) {
       : { captured: results.length, responses: results };
   } finally {
     await chrome.debugger.detach(target).catch(() => {});
+  }
+}
+
+/**
+ * Extract data from a virtually-rendered page using 10 approaches in sequence.
+ * Returns the first approach that yields results. Designed for SPAs with
+ * IntersectionObserver-based lazy rendering (e.g., Amex Travel hotel cards).
+ *
+ * cmd: { url?, chromeTabId?, selector (container), extract (JS expression), waitMs? }
+ */
+async function cmdExtractVirtual(cmd) {
+  const tabId = await resolveTabId(cmd);
+  if (!tabId) return { error: "Tab not found" };
+
+  const selector = cmd.selector || "[data-testid='hotels-list']";
+  const extract = cmd.extract || "var h=document.querySelector('" + selector.replace(/'/g, "\\'") + "');var html=h?h.innerHTML:'';var m=html.match(/aria-label=\"Select Hotel [^\"]+\"/g);m?m.join('|||'):'NONE'";
+  const waitMs = cmd.waitMs || 2000;
+  const results = { approaches: {} };
+
+  // Step 1: Focus the tab
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    await chrome.tabs.update(tabId, { active: true });
+    await chrome.windows.update(tab.windowId, { focused: true });
+  } catch (_) {}
+  await new Promise((r) => setTimeout(r, waitMs));
+
+  const target = { tabId };
+  await chrome.debugger.attach(target, "1.3");
+
+  let detached = false;
+  const cleanup = () => { if (!detached) { detached = true; chrome.debugger.detach(target).catch(() => {}); } };
+  const safetyTimer = setTimeout(cleanup, 55000);
+
+  try {
+    // Helper: eval in page and return string result
+    async function evalPage(expr) {
+      const r = await cdp(target, "Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: false });
+      if (r.exceptionDetails) return null;
+      return r.result.value;
+    }
+
+    async function evalPageAsync(expr) {
+      const r = await cdp(target, "Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true });
+      if (r.exceptionDetails) return null;
+      return r.result.value;
+    }
+
+    // Approach 1: Direct extraction (no scroll)
+    let data = await evalPage(extract);
+    if (data && data !== "NONE" && data.length > 10) {
+      results.method = "direct";
+      results.data = data;
+      results.approaches.direct = "success";
+      return results;
+    }
+    results.approaches.direct = "no data";
+
+    // Approach 2: Progressive scroll then extract
+    for (let i = 0; i <= 8; i++) {
+      await evalPage(`window.scrollTo(0, ${i * 500})`);
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    await evalPage("window.scrollTo(0, 0)");
+    await new Promise((r) => setTimeout(r, 500));
+    data = await evalPage(extract);
+    if (data && data !== "NONE" && data.length > 10) {
+      results.method = "scroll";
+      results.data = data;
+      results.approaches.scroll = "success";
+      return results;
+    }
+    results.approaches.scroll = "no data";
+
+    // Approach 3: Screenshot to force paint, then extract
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      await chrome.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality: 10 });
+      await new Promise((r) => setTimeout(r, 500));
+      data = await evalPage(extract);
+      if (data && data !== "NONE" && data.length > 10) {
+        results.method = "screenshot";
+        results.data = data;
+        results.approaches.screenshot = "success";
+        return results;
+      }
+    } catch (_) {}
+    results.approaches.screenshot = "no data";
+
+    // Approach 4: Scroll each card into view via scrollIntoView
+    data = await evalPage(`
+      var container = document.querySelector('${selector.replace(/'/g, "\\'")}');
+      if (container) {
+        var children = container.querySelectorAll('[class*="card"], [class*="Card"], [data-testid*="hotel"], [class*="offer"]');
+        for (var i = 0; i < children.length; i++) {
+          children[i].scrollIntoView({block: 'center'});
+        }
+      }
+      'scrolled ' + (container ? container.querySelectorAll('[class*="card"], [class*="Card"]').length : 0) + ' cards'
+    `);
+    results.approaches.scrollCards = data;
+    await new Promise((r) => setTimeout(r, 500));
+    data = await evalPage(extract);
+    if (data && data !== "NONE" && data.length > 10) {
+      results.method = "scrollCards";
+      results.data = data;
+      return results;
+    }
+
+    // Approach 5: MutationObserver — scroll and wait for DOM changes
+    data = await evalPageAsync(`
+      new Promise(resolve => {
+        var container = document.querySelector('${selector.replace(/'/g, "\\'")}');
+        if (!container) return resolve('no container');
+        var changed = false;
+        var obs = new MutationObserver(() => { changed = true; });
+        obs.observe(container, {childList: true, subtree: true});
+        window.scrollTo(0, 500);
+        setTimeout(() => {
+          obs.disconnect();
+          resolve(changed ? 'mutations detected' : 'no mutations');
+        }, 2000);
+      })
+    `);
+    results.approaches.mutationObserver = data;
+    if (data === "mutations detected") {
+      data = await evalPage(extract);
+      if (data && data !== "NONE" && data.length > 10) {
+        results.method = "mutation";
+        results.data = data;
+        return results;
+      }
+    }
+
+    // Approach 6: Read innerText of the container for fallback text parsing
+    data = await evalPage(`
+      var container = document.querySelector('${selector.replace(/'/g, "\\'")}');
+      container ? container.innerText.substring(0, 5000) : 'no container'
+    `);
+    if (data && data !== "no container" && data.length > 50) {
+      results.method = "innerText";
+      results.data = data;
+      results.approaches.innerText = "success (" + data.length + " chars)";
+      return results;
+    }
+    results.approaches.innerText = "no data";
+
+    // Approach 7: Fetch intercept — monkey-patch fetch, trigger search via URL change
+    await evalPage(`
+      window.__capturedResponses = [];
+      var _origFetch = window.fetch;
+      window.fetch = function(url, opts) {
+        var p = _origFetch.apply(this, arguments);
+        p.then(function(r) {
+          if (r.url && (r.url.includes('hotel') || r.url.includes('offer') || r.url.includes('search') || r.url.includes('accommodation'))) {
+            r.clone().text().then(function(t) { window.__capturedResponses.push({url: r.url, body: t.substring(0, 50000)}); });
+          }
+        }).catch(function(){});
+        return p;
+      };
+      'fetch intercepted'
+    `);
+    // Trigger a re-search by scrolling or clicking Update
+    await evalPage(`
+      var btn = document.querySelector('button');
+      var btns = document.querySelectorAll('button');
+      for (var i = 0; i < btns.length; i++) {
+        if (btns[i].textContent.trim() === 'Update') { btns[i].click(); break; }
+      }
+      'clicked update'
+    `);
+    await new Promise((r) => setTimeout(r, 5000));
+    data = await evalPage("JSON.stringify(window.__capturedResponses || [])");
+    if (data && data !== "[]") {
+      results.method = "fetchIntercept";
+      results.data = data;
+      results.approaches.fetchIntercept = "success";
+      return results;
+    }
+    results.approaches.fetchIntercept = "no captures";
+
+    // Approach 8: __NEXT_DATA__ extraction
+    data = await evalPage(`
+      var nd = document.getElementById('__NEXT_DATA__');
+      nd ? nd.textContent.substring(0, 3000) : 'no __NEXT_DATA__'
+    `);
+    results.approaches.nextData = data && data.length > 100 ? "found (" + data.length + " chars)" : "no data";
+
+    // Approach 9: XHR intercept
+    await evalPage(`
+      window.__xhrCaptures = [];
+      var _origOpen = XMLHttpRequest.prototype.open;
+      var _origSend = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.open = function(m, u) { this._url = u; _origOpen.apply(this, arguments); };
+      XMLHttpRequest.prototype.send = function() {
+        this.addEventListener('load', function() {
+          if (this._url && (this._url.includes('hotel') || this._url.includes('offer') || this._url.includes('search'))) {
+            window.__xhrCaptures.push({url: this._url, body: this.responseText?.substring(0, 50000)});
+          }
+        });
+        _origSend.apply(this, arguments);
+      };
+      'xhr intercepted'
+    `);
+    await new Promise((r) => setTimeout(r, 3000));
+    data = await evalPage("JSON.stringify(window.__xhrCaptures || [])");
+    if (data && data !== "[]") {
+      results.method = "xhrIntercept";
+      results.data = data;
+      results.approaches.xhrIntercept = "success";
+      return results;
+    }
+    results.approaches.xhrIntercept = "no captures";
+
+    // Approach 10: Full body text as last resort
+    data = await evalPage("document.body.innerText.substring(0, 8000)");
+    results.method = "bodyText";
+    results.data = data;
+    results.approaches.bodyText = data ? data.length + " chars" : "empty";
+
+    return results;
+  } finally {
+    clearTimeout(safetyTimer);
+    cleanup();
   }
 }
 

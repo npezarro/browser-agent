@@ -377,6 +377,24 @@ case "$cmd" in
       '{action:"cdpNetworkCapture", urlPattern:$p, timeout:$t, maxLen:$m, listUrls:$l} + if $u != "" then {url:$u} else {} end')"
     ;;
 
+  extract-virtual|ev)
+    # Extract data from virtually-rendered pages (tries 10 approaches)
+    # Usage: extract-virtual [tabUrl] [--selector SEL] [--extract EXPR]
+    local_ev_url="" ev_selector="" ev_extract=""
+    for arg in "$@"; do
+      case "$arg" in
+        --selector) shift_next="selector" ;;
+        --extract) shift_next="extract" ;;
+        *)
+          if [ "${shift_next:-}" = "selector" ]; then ev_selector="$arg"; shift_next=""
+          elif [ "${shift_next:-}" = "extract" ]; then ev_extract="$arg"; shift_next=""
+          else local_ev_url="$arg"; fi ;;
+      esac
+    done
+    TIMEOUT=70 interactive "" "$(jq -nc --arg u "$local_ev_url" --arg s "$ev_selector" --arg e "$ev_extract" \
+      '{action:"extractVirtual"} + if $u != "" then {url:$u} else {} end + if $s != "" then {selector:$s} else {} end + if $e != "" then {extract:$e} else {} end')"
+    ;;
+
   console)
     interactive "${2:-$DEFAULT_TAB}" "$(jq -nc --argjson n "${1:-50}" '{action:"getConsoleLog", count:$n}')"
     ;;
