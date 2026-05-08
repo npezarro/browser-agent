@@ -1,13 +1,23 @@
 # context.md — browser-agent
 
-Last Updated: 2026-05-05 — CDP eval fix (v2.2.1), hotel availability research
+Last Updated: 2026-05-07 — v2.5.0 extractVirtual, debugger safety, Amex Travel SPA research
 
 ## Current State
-- **Extension v2.2.1** — MV3 content script + background service worker
+- **Extension v2.5.0** — MV3 content script + background service worker
 - Server running via PM2 (`browser-agent`) on port 3102
-- 30+ commands: navigate, click, type, setInput, fill, upload, clickAny, wait-for, assert, etc.
+- 30+ commands: navigate, click, type, setInput, fill, upload, clickAny, wait-for, assert, cdpEval, extractVirtual, network-capture, etc.
 - Background service worker handles tab management, CDP trusted input, screenshots, JS eval (bypasses CSP)
 - Content script uses `fetch()` instead of `GM_xmlhttpRequest`, `chrome.storage.local` instead of `GM_setValue`
+- **Branch note:** `claude/learnings-510` has one CLAUDE.md doc commit ahead of master; merge pending
+
+## v2.4.0-v2.5.0 Changes (2026-05-07)
+- **`extractVirtual`**: 10-approach extraction for virtually-rendered SPAs (IntersectionObserver-based lazy DOM). Progressive scroll + aria-label extraction is the winning approach for Amex Travel. 55s safety timer guarantees debugger cleanup.
+- **`network-capture`**: Capture XHR responses via CDP Network domain. `--list` mode for URL discovery.
+- **`cdpEval --focus --scroll`**: Focus tab + scroll before eval. Manual debugger lifecycle with safety timer.
+- **`focusTab` fix**: Changed `.startsWith()` to `.includes()` for bare domain URL matching.
+- **Debugger safety pattern**: All CDP operations use `let detached = false; const cleanup = ...` with safety timer to prevent "Another debugger is already attached" errors when server timeout fires before extension completes.
+- **rAF removed from scroll**: `requestAnimationFrame` promises hang on unfocused tabs; replaced with `setTimeout` delays.
+- **Routing**: `cdpNetworkCapture` and `extractVirtual` added to `EXT_TAB_ACTIONS` in `lib/core.js`.
 
 ## v2.2.0 Changes (2026-04-25)
 - **`cdpEval`**: Run arbitrary JS via CDP Runtime.evaluate, bypasses CSP on FB/Google Photos/Deepgram. CLI supports `--await` flag for promise-returning expressions. (Bugfix `0eec567`: fixed double-shift in arg parsing that broke all cdp-eval calls.)
@@ -66,5 +76,17 @@ Full session closeout: privateContext/deliverables/closeouts/2026-05-05-browser-
 
 Full session closeout: privateContext/deliverables/closeouts/2026-05-05-browser-agent-public-release.md
 
+## 2026-05-07 — v2.4.0-v2.5.0 Virtual Extraction + Amex FHR Research
+- Built extractVirtual command (10 approaches) for Amex Travel's virtually-rendered hotel cards
+- Fixed debugger lifecycle: safety timers prevent leak when server timeout fires first
+- Fixed focusTab URL matching for bare domains
+- Removed rAF from scroll loop (hangs on unfocused tabs)
+- Added network-capture command with --list mode
+- Successfully extracted pricing from 6 different Amex Travel searches (Lisbon, Granada, Seville, Madrid x2, Mexico City)
+- SPA form manipulation pattern: edit button -> clear destination -> type -> autocomplete -> dates -> Update
+- Amex Travel requires prebooking OAuth redirect flow; direct URL navigation returns 0 results
+
+Full session closeout: privateContext/deliverables/closeouts/2026-05-07-amex-fhr-research-browser-agent-extraction.md
+
 ## Active Branch
-`master`
+`master` (with `claude/learnings-510` one commit ahead for CLAUDE.md docs)
