@@ -180,6 +180,11 @@ function createApp(opts = {}) {
     try { fs.mkdirSync(dir, { recursive: true }); } catch { /* ignored */ }
   }
 
+  // Sanitize slugs/sessionIds to prevent path traversal (allow alphanumeric, hyphens, underscores, dots)
+  function sanitizePathComponent(s) {
+    return String(s).replace(/[^a-zA-Z0-9_.-]/g, '_').replace(/\.{2,}/g, '_');
+  }
+
   function persistCoworkSession(sessionId) {
     const session = coworkSessions[sessionId];
     if (!session) return;
@@ -188,7 +193,8 @@ function createApp(opts = {}) {
     const dir = pathMod.join(COWORK_DIR, date);
     ensureDir(dir);
 
-    const filePath = pathMod.join(dir, `${session.slug || sessionId}.json`);
+    const safeName = sanitizePathComponent(session.slug || sessionId);
+    const filePath = pathMod.join(dir, `${safeName}.json`);
     try {
       fs.writeFileSync(filePath, JSON.stringify({ id: sessionId, ...session }, null, 2));
     } catch (err) {
@@ -205,7 +211,8 @@ function createApp(opts = {}) {
     ensureDir(dir);
 
     const md = snapshotToMarkdown(sessionId, session);
-    const filePath = pathMod.join(dir, `${session.slug || sessionId}.md`);
+    const safeName = sanitizePathComponent(session.slug || sessionId);
+    const filePath = pathMod.join(dir, `${safeName}.md`);
     try {
       fs.writeFileSync(filePath, md);
       console.log(`[Cowork] Wrote markdown: ${filePath}`);
@@ -282,7 +289,8 @@ function createApp(opts = {}) {
     ensureDir(sessionDir);
 
     const md = snapshotToMarkdown(sessionId, session);
-    const mdPath = pathMod.join(sessionDir, `${session.slug || sessionId}.md`);
+    const safeName = sanitizePathComponent(session.slug || sessionId);
+    const mdPath = pathMod.join(sessionDir, `${safeName}.md`);
 
     try {
       fs.writeFileSync(mdPath, md);
