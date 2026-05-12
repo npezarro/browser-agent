@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Browser Agent (Generic)
 // @namespace    https://pezant.ca
-// @version      1.15.0
+// @version      1.16.0
 // @description  Generic remote browser agent. Polls server for commands, executes them, reports results. Works on all pages.
 // @author       npezarro
 // @match        *://*/*
@@ -24,9 +24,10 @@
   // Skip iframes — only run in top-level windows
   if (window.self !== window.top) return;
 
-  const VERSION = "1.15.0";
+  const VERSION = "1.16.0";
   const API_BASE = "https://pezant.ca/api/browser-agent";
   const API = API_BASE + "/agent";
+  const AGENT_SECRET = GM_getValue("agentSecret", "");
   const POLL_MS = 3000;
   const USER_IDLE_MS = 5000; // Resume polling after 5s of no user activity
 
@@ -102,11 +103,17 @@
     post("/log", { tabId, msg, ts: Date.now() });
   }
 
+  function agentHeaders() {
+    const h = { "Content-Type": "application/json" };
+    if (AGENT_SECRET) h["X-Agent-Secret"] = AGENT_SECRET;
+    return h;
+  }
+
   function post(path, data) {
     GM_xmlhttpRequest({
       method: "POST",
       url: API + path,
-      headers: { "Content-Type": "application/json" },
+      headers: agentHeaders(),
       data: JSON.stringify(data),
     });
   }
@@ -512,6 +519,7 @@
             GM_xmlhttpRequest({
               method: "GET",
               url: `${API_BASE}/agent/blob/${cmd.blobId}`,
+              headers: agentHeaders(),
               onload: (resp) => {
                 if (resp.status !== 200) return reject(new Error(`Blob fetch failed: ${resp.status}`));
                 try { resolve(JSON.parse(resp.responseText)); }
@@ -656,7 +664,7 @@
     GM_xmlhttpRequest({
       method: "GET",
       url: `${API}/commands?tabId=${tabId}&url=${encodeURIComponent(window.location.href)}`,
-      headers: { "Content-Type": "application/json" },
+      headers: agentHeaders(),
       onload: async (resp) => {
         polling = false;
         if (resp.status !== 200) return;

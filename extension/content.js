@@ -4,11 +4,17 @@
 
 "use strict";
 
-const VERSION = "2.0.0";
+const VERSION = "2.1.0";
 const API_BASE = "https://pezant.ca/api/browser-agent";
 const API = API_BASE + "/agent";
 const POLL_MS = 3000;
 const USER_IDLE_MS = 5000;
+
+// ── Agent secret (loaded from chrome.storage.local) ──
+let AGENT_SECRET = "";
+chrome.storage.local.get("ba_agentSecret").then((s) => {
+  AGENT_SECRET = s.ba_agentSecret || "";
+});
 
 // ── User activity detection — pause polling during active browser use ──
 
@@ -75,6 +81,12 @@ window.addEventListener("error", (e) => {
 
 // ── Network helpers ──
 
+function agentHeaders() {
+  const h = { "Content-Type": "application/json" };
+  if (AGENT_SECRET) h["X-Agent-Secret"] = AGENT_SECRET;
+  return h;
+}
+
 function log(msg) {
   origLog(`[BrowserAgent] ${msg}`);
   post("/log", { tabId, msg, ts: Date.now() });
@@ -83,7 +95,7 @@ function log(msg) {
 function post(path, data) {
   fetch(API + path, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: agentHeaders(),
     body: JSON.stringify(data),
   }).catch(() => {});
 }
@@ -92,7 +104,7 @@ function post(path, data) {
 function postKeepAlive(path, data) {
   fetch(API + path, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: agentHeaders(),
     body: JSON.stringify(data),
     keepalive: true,
   }).catch(() => {});
@@ -500,7 +512,9 @@ async function execCommand(cmd) {
       }
 
       case "uploadFile": {
-        const resp = await fetch(`${API}/blob/${cmd.blobId}`);
+        const resp = await fetch(`${API}/blob/${cmd.blobId}`, {
+          headers: AGENT_SECRET ? { "X-Agent-Secret": AGENT_SECRET } : {},
+        });
         if (resp.status !== 200) throw new Error(`Blob fetch failed: ${resp.status}`);
         const blobData = await resp.json();
         if (!blobData.ok) throw new Error("Blob not found or expired");
@@ -631,7 +645,9 @@ async function poll() {
   polling = true;
 
   try {
-    const resp = await fetch(`${API}/commands?tabId=${tabId}&url=${encodeURIComponent(window.location.href)}`);
+    const resp = await fetch(`${API}/commands?tabId=${tabId}&url=${encodeURIComponent(window.location.href)}`, {
+      headers: AGENT_SECRET ? { "X-Agent-Secret": AGENT_SECRET } : {},
+    });
     if (resp.status !== 200) return;
     const data = await resp.json();
     if (!data.commands || data.commands.length === 0) return;

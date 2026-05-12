@@ -31,6 +31,7 @@ const {
  * Create a Browser Agent server instance with isolated state.
  * @param {object} opts
  * @param {string} opts.apiKey - Required API key for authenticated endpoints
+ * @param {string} [opts.agentSecret] - Shared secret for agent endpoints (heartbeat, commands, result, log)
  * @param {number} [opts.port=3102] - Port to listen on
  * @param {string} [opts.coworkDir] - Directory for cowork session persistence
  * @param {string} [opts.coworkRepo] - Directory for cowork git repo sync
@@ -39,6 +40,7 @@ const {
  */
 function createApp(opts = {}) {
   const API_KEY = opts.apiKey;
+  const AGENT_SECRET = opts.agentSecret;
   const homeDir = process.env.HOME || "/tmp";
   const COWORK_DIR = opts.coworkDir || `${homeDir}/cowork-sessions`;
   const COWORK_REPO = opts.coworkRepo || `${homeDir}/my-claude-cowork`;
@@ -119,6 +121,12 @@ function createApp(opts = {}) {
   function checkAuth(req) {
     const auth = req.headers.authorization || "";
     return auth === `Bearer ${API_KEY}`;
+  }
+
+  function checkAgentAuth(req) {
+    if (!AGENT_SECRET) return true; // No secret configured = open (backwards compatible)
+    const provided = req.headers["x-agent-secret"] || "";
+    return provided === AGENT_SECRET;
   }
 
   function readBody(req) {
@@ -342,10 +350,11 @@ function createApp(opts = {}) {
       });
     }
 
-    // ── Agent endpoints (no auth — called by TM script) ──
+    // ── Agent endpoints (shared secret auth — called by TM script / extension) ──
 
     // Heartbeat
     if (req.method === "POST" && path === "/agent/heartbeat") {
+      if (!checkAgentAuth(req)) return json(res, { error: "Unauthorized" }, 401);
       try {
         const state = await readBody(req);
         const tid = state.tabId || "default";
@@ -357,6 +366,7 @@ function createApp(opts = {}) {
 
     // Log
     if (req.method === "POST" && path === "/agent/log") {
+      if (!checkAgentAuth(req)) return json(res, { error: "Unauthorized" }, 401);
       try {
         const { tabId, msg, ts } = await readBody(req);
         const entry = buildLogEntry(tabId, msg, ts);
@@ -368,6 +378,7 @@ function createApp(opts = {}) {
 
     // Poll for commands
     if (req.method === "GET" && path === "/agent/commands") {
+      if (!checkAgentAuth(req)) return json(res, { error: "Unauthorized" }, 401);
       const tid = parsed?.searchParams?.get("tabId") || "default";
       const url = parsed?.searchParams?.get("url") || "";
       if (agentTabs[tid]) {
@@ -382,6 +393,7 @@ function createApp(opts = {}) {
 
     // Report result
     if (req.method === "POST" && path === "/agent/result") {
+      if (!checkAgentAuth(req)) return json(res, { error: "Unauthorized" }, 401);
       try {
         const result = await readBody(req);
         pushResult(result);
@@ -407,8 +419,9 @@ function createApp(opts = {}) {
       }
     }
 
-    // Serve blob to TM script (no auth — same as commands endpoint)
+    // Serve blob to agent scripts (auth via agent secret)
     if (req.method === "GET" && path.startsWith("/agent/blob/")) {
+      if (!checkAgentAuth(req)) return json(res, { error: "Unauthorized" }, 401);
       const blobId = path.replace("/agent/blob/", "");
       const blob = uploadBlobs[blobId];
       if (!blob) return json(res, { error: "Blob not found or expired" }, 404);
@@ -816,8 +829,14 @@ if (require.main === module) {
     process.exit(1);
   }
 
+  const AGENT_SECRET = process.env.BROWSER_AGENT_AGENT_SECRET;
+  if (!AGENT_SECRET) {
+    console.warn("[Browser Agent] BROWSER_AGENT_AGENT_SECRET not set. Agent endpoints are unauthenticated.");
+  }
+
   const app = createApp({
     apiKey: API_KEY,
+    agentSecret: AGENT_SECRET,
     port: PORT,
     coworkDir: process.env.COWORK_SESSION_DIR,
     coworkRepo: process.env.COWORK_REPO_DIR,

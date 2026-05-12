@@ -266,6 +266,102 @@ describe("auth enforcement", () => {
   });
 });
 
+// ── Agent secret enforcement ──
+
+describe("agent secret auth", () => {
+  let secApp, secBaseUrl;
+
+  before(async () => {
+    secApp = createApp({ apiKey: "sec-key", agentSecret: "test-secret-xyz", _skipTimers: true, coworkDir: path.join(os.tmpdir(), `ba-sec-cowork-${Date.now()}`), coworkRepo: path.join(os.tmpdir(), `ba-sec-repo-${Date.now()}`) });
+    await new Promise((resolve) => secApp.server.listen(0, "127.0.0.1", resolve));
+    const addr = secApp.server.address();
+    secBaseUrl = `http://127.0.0.1:${addr.port}`;
+  });
+
+  after(() => {
+    secApp.cleanup();
+    secApp.server.close();
+  });
+
+  function secReq(method, urlPath, { body, headers } = {}) {
+    return new Promise((resolve, reject) => {
+      const url = new URL(urlPath, secBaseUrl);
+      const opts = { method, hostname: url.hostname, port: url.port, path: url.pathname + url.search, headers: headers || {} };
+      if (body !== undefined) {
+        const payload = JSON.stringify(body);
+        opts.headers["content-type"] = "application/json";
+        opts.headers["content-length"] = Buffer.byteLength(payload);
+        const req = http.request(opts, collect);
+        req.on("error", reject);
+        req.write(payload);
+        req.end();
+      } else {
+        const req = http.request(opts, collect);
+        req.on("error", reject);
+        req.end();
+      }
+      function collect(res) {
+        let data = "";
+        res.on("data", (c) => (data += c));
+        res.on("end", () => {
+          let json;
+          try { json = JSON.parse(data); } catch { json = data; }
+          resolve({ status: res.statusCode, body: json });
+        });
+      }
+    });
+  }
+
+  it("rejects agent heartbeat without secret", async () => {
+    const r = await secReq("POST", "/agent/heartbeat", { body: { tabId: "t1", url: "https://example.com" } });
+    assert.equal(r.status, 401);
+  });
+
+  it("rejects agent commands poll without secret", async () => {
+    const r = await secReq("GET", "/agent/commands?tabId=t1");
+    assert.equal(r.status, 401);
+  });
+
+  it("rejects agent result without secret", async () => {
+    const r = await secReq("POST", "/agent/result", { body: { id: "c1", ok: true } });
+    assert.equal(r.status, 401);
+  });
+
+  it("rejects agent log without secret", async () => {
+    const r = await secReq("POST", "/agent/log", { body: { tabId: "t1", msg: "test" } });
+    assert.equal(r.status, 401);
+  });
+
+  it("rejects agent blob without secret", async () => {
+    const r = await secReq("GET", "/agent/blob/fake-id");
+    assert.equal(r.status, 401);
+  });
+
+  it("accepts agent heartbeat with correct secret", async () => {
+    const r = await secReq("POST", "/agent/heartbeat", {
+      body: { tabId: "t1", url: "https://example.com" },
+      headers: { "x-agent-secret": "test-secret-xyz", "content-type": "application/json" },
+    });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.ok, true);
+  });
+
+  it("accepts agent commands poll with correct secret", async () => {
+    const r = await secReq("GET", "/agent/commands?tabId=t1", {
+      headers: { "x-agent-secret": "test-secret-xyz" },
+    });
+    assert.equal(r.status, 200);
+  });
+
+  it("rejects with wrong secret", async () => {
+    const r = await secReq("POST", "/agent/heartbeat", {
+      body: { tabId: "t1", url: "https://example.com" },
+      headers: { "x-agent-secret": "wrong-secret", "content-type": "application/json" },
+    });
+    assert.equal(r.status, 401);
+  });
+});
+
 // ── Tabs ──
 
 describe("GET /agent/tabs", () => {
