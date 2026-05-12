@@ -96,6 +96,22 @@ function createApp(opts = {}) {
     }
   }
 
+  // ── Cowork State ──
+  const coworkSessions = {};
+  let coworkPending = null;
+  const COWORK_STALE_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+  function pruneCoworkSessions() {
+    const now = Date.now();
+    for (const [sid, session] of Object.entries(coworkSessions)) {
+      const lastUpdate = session.lastHeartbeat || (session.capturedAt ? new Date(session.capturedAt).getTime() : 0);
+      if (now - lastUpdate > COWORK_STALE_MS) {
+        delete coworkSessions[sid];
+        console.log(`[Cleanup] Pruned stale cowork session: ${session.slug || sid}`);
+      }
+    }
+  }
+
   // Timers (stored for cleanup)
   const timers = [];
   if (!opts._skipTimers) {
@@ -104,12 +120,9 @@ function createApp(opts = {}) {
       pruneTabs();
       pruneResultWaiters();
       pruneCommandQueues();
+      pruneCoworkSessions();
     }, 30_000));
   }
-
-  // ── Cowork State ──
-  const coworkSessions = {};
-  let coworkPending = null;
 
   // ── Helpers ──
 

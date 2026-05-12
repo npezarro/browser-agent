@@ -666,8 +666,7 @@
       url: `${API}/commands?tabId=${tabId}&url=${encodeURIComponent(window.location.href)}`,
       headers: agentHeaders(),
       onload: async (resp) => {
-        polling = false;
-        if (resp.status !== 200) return;
+        if (resp.status !== 200) { polling = false; return; }
         try {
           const data = JSON.parse(resp.responseText);
           if (!data.commands || data.commands.length === 0) return;
@@ -718,7 +717,7 @@
         } catch (err) {
           origError("[BrowserAgent] Poll error:", err);
         } finally {
-          // poll complete
+          polling = false;
         }
       },
       onerror: () => { polling = false; },
