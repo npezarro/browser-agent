@@ -39,7 +39,8 @@ Skipping step 2 means Chrome still sees the old code.
 
 ## Environment
 
-- `BROWSER_AGENT_KEY` — Required. API key for auth. Set in `.env` on VM and `~/.bashrc` locally.
+- `BROWSER_AGENT_KEY` — Required. API key for auth on CLI/ext endpoints. Set in `.env` on VM and `~/.bashrc` locally.
+- `BROWSER_AGENT_AGENT_SECRET` — Shared secret for agent endpoints (heartbeat, commands, result, log, blob). Sent via `X-Agent-Secret` header by content script and TM script. Backwards compatible: if unset, agent endpoints remain open.
 - `BROWSER_AGENT_PORT` — Server port (default 3102)
 - `BROWSER_AGENT_URL` — CLI override for server URL (default `https://pezant.ca/api/browser-agent`)
 
