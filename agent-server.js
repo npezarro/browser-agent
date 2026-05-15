@@ -9,6 +9,7 @@
  * Port: 3102 (behind Apache reverse proxy at /api/browser-agent/)
  */
 
+require("dotenv").config();
 const http = require("http");
 const fs = require("fs");
 const pathMod = require("path");
@@ -841,8 +842,6 @@ function createApp(opts = {}) {
 // ── Auto-start when run directly ──
 
 if (require.main === module) {
-  require("dotenv").config();
-
   const PORT = process.env.BROWSER_AGENT_PORT || 3102;
   const API_KEY = process.env.BROWSER_AGENT_KEY;
   if (!API_KEY) {
