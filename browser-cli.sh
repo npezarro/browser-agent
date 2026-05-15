@@ -173,7 +173,7 @@ case "$cmd" in
       local_open_url="${2:?url required}"
       local_open_tab="${3:-$DEFAULT_TAB}"
       interactive "$local_open_tab" "$(jq -nc --arg u "$local_open_url" '{action:"openTabBackground", url:$u}')"
-    elif [[ "$2" == "--bg" || "$2" == "--background" ]]; then
+    elif [[ "${2:-}" == "--bg" || "${2:-}" == "--background" ]]; then
       interactive "$local_open_tab" "$(jq -nc --arg u "$local_open_url" '{action:"openTabBackground", url:$u}')"
     else
       interactive "$local_open_tab" "$(jq -nc --arg u "$local_open_url" '{action:"openTab", url:$u}')"
