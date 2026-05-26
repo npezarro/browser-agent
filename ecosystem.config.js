@@ -2,6 +2,7 @@ module.exports = {
   apps: [
     {
       name: "browser-agent",
+    node_args: '--max-old-space-size=256',
       script: "agent-server.js",
       autorestart: true,
       max_memory_restart: "100M",
