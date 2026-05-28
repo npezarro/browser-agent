@@ -30,8 +30,8 @@ const {
 /**
  * Create a Browser Agent server instance with isolated state.
  * @param {object} opts
- * @param {string} opts.apiKey - Required API key for authenticated endpoints
- * @param {string} [opts.agentSecret] - Shared secret for agent endpoints (heartbeat, commands, result, log)
+ * @param {string|string[]} opts.apiKey - Required API key(s) for authenticated endpoints. Pass an array to accept multiple (e.g., primary + alt account).
+ * @param {string|string[]} [opts.agentSecret] - Shared secret(s) for agent endpoints (heartbeat, commands, result, log). Accepts an array for multiple profiles.
  * @param {number} [opts.port=3102] - Port to listen on
  * @param {string} [opts.coworkDir] - Directory for cowork session persistence
  * @param {string} [opts.coworkRepo] - Directory for cowork git repo sync
@@ -39,8 +39,8 @@ const {
  * @returns {{ server: http.Server, state: object, cleanup: () => void }}
  */
 function createApp(opts = {}) {
-  const API_KEY = opts.apiKey;
-  const AGENT_SECRET = opts.agentSecret;
+  const API_KEYS = (Array.isArray(opts.apiKey) ? opts.apiKey : [opts.apiKey]).filter(Boolean);
+  const AGENT_SECRETS = (Array.isArray(opts.agentSecret) ? opts.agentSecret : [opts.agentSecret]).filter(Boolean);
   const homeDir = process.env.HOME || "/tmp";
   const COWORK_DIR = opts.coworkDir || `${homeDir}/cowork-sessions`;
   const COWORK_REPO = opts.coworkRepo || `${homeDir}/my-claude-cowork`;
@@ -133,13 +133,13 @@ function createApp(opts = {}) {
 
   function checkAuth(req) {
     const auth = req.headers.authorization || "";
-    return auth === `Bearer ${API_KEY}`;
+    return API_KEYS.some((k) => auth === `Bearer ${k}`);
   }
 
   function checkAgentAuth(req) {
-    if (!AGENT_SECRET) return true; // No secret configured = open (backwards compatible)
+    if (AGENT_SECRETS.length === 0) return true; // No secret configured = open (backwards compatible)
     const provided = req.headers["x-agent-secret"] || "";
-    return provided === AGENT_SECRET;
+    return AGENT_SECRETS.includes(provided);
   }
 
   function readBody(req) {
@@ -844,20 +844,23 @@ if (require.main === module) {
   require("dotenv").config();
 
   const PORT = process.env.BROWSER_AGENT_PORT || 3102;
-  const API_KEY = process.env.BROWSER_AGENT_KEY;
-  if (!API_KEY) {
+  const API_KEYS = [process.env.BROWSER_AGENT_KEY, process.env.BROWSER_AGENT_KEY_ALT].filter(Boolean);
+  if (API_KEYS.length === 0) {
     console.error("[Browser Agent] BROWSER_AGENT_KEY not set in environment. Exiting.");
     process.exit(1);
   }
+  if (process.env.BROWSER_AGENT_KEY_ALT) {
+    console.log("[Browser Agent] Accepting alt account key (BROWSER_AGENT_KEY_ALT).");
+  }
 
-  const AGENT_SECRET = process.env.BROWSER_AGENT_AGENT_SECRET;
-  if (!AGENT_SECRET) {
+  const AGENT_SECRETS = [process.env.BROWSER_AGENT_AGENT_SECRET, process.env.BROWSER_AGENT_AGENT_SECRET_ALT].filter(Boolean);
+  if (AGENT_SECRETS.length === 0) {
     console.warn("[Browser Agent] BROWSER_AGENT_AGENT_SECRET not set. Agent endpoints are unauthenticated.");
   }
 
   const app = createApp({
-    apiKey: API_KEY,
-    agentSecret: AGENT_SECRET,
+    apiKey: API_KEYS,
+    agentSecret: AGENT_SECRETS,
     port: PORT,
     coworkDir: process.env.COWORK_SESSION_DIR,
     coworkRepo: process.env.COWORK_REPO_DIR,
