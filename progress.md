@@ -1,5 +1,15 @@
 # progress.md — browser-agent
 
+## 2026-05-28 — Multi-Key Auth
+- 4226629 — Accept multiple BROWSER_AGENT_KEY values for alt-account profile
+  - apiKey + agentSecret in createApp now accept string OR string[]
+  - Bootstrap reads BROWSER_AGENT_KEY + BROWSER_AGENT_KEY_ALT, filters and passes as array
+  - checkAuth: API_KEYS.some((k) => auth === `Bearer ${k}`)
+  - checkAgentAuth: AGENT_SECRETS.includes(provided), open if list empty
+  - VM .env updated with alt key; service restarted, `pm2 save` run
+  - Verified: primary -> 200, alt -> 200, bad -> 401 on GET /agent/tabs
+  - Backwards compatible: existing string-form `apiKey: "..."` test calls untouched
+
 ## 2026-05-07 — v2.4.0-v2.5.0 Virtual Extraction
 - ff2d216 — v2.4.0: Fix focus URL matching, add --focus/--scroll to cdp-eval, add network-capture
   - cmdFocusTab: .startsWith() -> .includes() for bare domain URLs

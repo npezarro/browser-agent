@@ -1,14 +1,21 @@
 # context.md — browser-agent
 
-Last Updated: 2026-05-07 — v2.5.0 extractVirtual, debugger safety, Amex Travel SPA research
+Last Updated: 2026-05-28 — multi-key auth for alt-account profile
 
 ## Current State
 - **Extension v2.5.0** — MV3 content script + background service worker
-- Server running via PM2 (`browser-agent`) on port 3102
+- Server running via PM2 (`browser-agent`) on port 3102, **accepts primary + alt API key** (BROWSER_AGENT_KEY + BROWSER_AGENT_KEY_ALT)
 - 30+ commands: navigate, click, type, setInput, fill, upload, clickAny, wait-for, assert, cdpEval, extractVirtual, network-capture, etc.
 - Background service worker handles tab management, CDP trusted input, screenshots, JS eval (bypasses CSP)
 - Content script uses `fetch()` instead of `GM_xmlhttpRequest`, `chrome.storage.local` instead of `GM_setValue`
 - **Branch note:** `claude/learnings-510` has one CLAUDE.md doc commit ahead of master; merge pending
+
+## 2026-05-28 — Multi-Key Auth
+- `createApp({ apiKey })` and `({ agentSecret })` now accept string OR string[]; string form preserved for backwards compat with existing tests.
+- Bootstrap reads `BROWSER_AGENT_KEY` + optional `BROWSER_AGENT_KEY_ALT` from env. Same pattern for the agent secret pair.
+- Use case: alt Google account (`nickthepezant@gmail.com`) runs the extension in a separate Chrome profile and authenticates with its own key. Keeps that profile's Google session warm and gives an independent revocation handle.
+- **Known limitation:** Relay does NOT partition `agentTabs` by which key heartbeated. Both keys see the union of tabs on `GET /agent/tabs`. Address only if a use case appears.
+- Full closeout: `privateContext/deliverables/closeouts/2026-05-28-browser-agent-multi-key.md`
 
 ## v2.4.0-v2.5.0 Changes (2026-05-07)
 - **`extractVirtual`**: 10-approach extraction for virtually-rendered SPAs (IntersectionObserver-based lazy DOM). Progressive scroll + aria-label extraction is the winning approach for Amex Travel. 55s safety timer guarantees debugger cleanup.
