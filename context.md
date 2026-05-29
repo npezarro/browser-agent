@@ -109,5 +109,16 @@ Full session closeout: privateContext/deliverables/closeouts/2026-05-07-amex-fhr
 
 Full session closeout: privateContext/deliverables/closeouts/2026-05-28-oauth-refresh-automation.md
 
+## 2026-05-29 — v2.7.0 Screenshot Expansion
+- Two capture paths now: `captureTab` (fast, `chrome.tabs.captureVisibleTab`, viewport+png/jpeg) and `captureAdvanced` (CDP `Page.captureScreenshot`, full-page via `captureBeyondViewport`, element clipping via `Runtime.evaluate` + `scrollIntoView`, webp support).
+- CLI `screenshot` accepts `--full`, `--selector`, `--format`, `--quality`, `--blob`. Auto-routes to the CDP path when any of those (or webp) are requested.
+- New `browser-cli see "<question>" [url] [flags]` — captures then invokes `claude -p --allowedTools Read`. Matches `fb-marketplace-poster/lib/analyze.js` pattern.
+- `captureAdvanced` added to `EXT_TAB_ACTIONS` allowlist in `lib/core.js`.
+- 185/185 tests passing. Deployed via `deploy.sh`.
+- **Open: extension reload to v2.7.0 in Chrome required before `captureAdvanced` calls succeed end-to-end.**
+- **Open: `BROWSER_AGENT_KEY` was echoed into the session transcript; rotate before next sensitive flow.** (Key prefix was already visible in this file's prior commits.)
+
+Full session closeout: privateContext/deliverables/closeouts/2026-05-29-browser-agent-screenshot-expansion.md
+
 ## Active Branch
 `master`

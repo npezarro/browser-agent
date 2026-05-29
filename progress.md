@@ -1,5 +1,16 @@
 # progress.md — browser-agent
 
+## 2026-05-29 — v2.7.0 Screenshot Expansion
+- 1a0fb78 — v2.7.0: full-page + element-clip screenshots, blob output, vision wrapper
+  - `cmdCaptureAdvanced` in extension/background.js: CDP `Page.captureScreenshot` with `captureBeyondViewport`, selector→`getBoundingClientRect` clip, png/jpeg/webp
+  - CLI screenshot flags: `--full`, `--selector`, `--format`, `--quality`, `--blob`
+  - New `browser-cli see "<q>"` vision wrapper (`claude -p --allowedTools Read`)
+  - `captureAdvanced` added to `EXT_TAB_ACTIONS` in lib/core.js
+  - Manifest 2.6.0 → 2.7.0
+  - Tests: 185 pass (new core.test.js assertion for captureAdvanced routing)
+  - Deployed: `BROWSER_AGENT_VM=... bash deploy.sh`, PM2 saved
+  - Open: extension reload required to exercise CDP path; rotate BROWSER_AGENT_KEY (leaked in session transcript)
+
 ## 2026-05-28 — Multi-Key Auth
 - 4226629 — Accept multiple BROWSER_AGENT_KEY values for alt-account profile
   - apiKey + agentSecret in createApp now accept string OR string[]
