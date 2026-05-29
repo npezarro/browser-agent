@@ -61,9 +61,12 @@ function createApp(opts = {}) {
   const resultWaiters = {};    // cmdId -> { resolve, timer }
 
   // ── Extension State ──
-  let extLastHeartbeat = 0;
-  const EXT_TTL = 30_000;      // 30s — extension heartbeat timeout
-  const extCommands = [];       // queued commands for extension
+  // Per-API-key tracking so a server with multiple keys (e.g. primary + alt
+  // account) can route commands to the matching browser's extension instead
+  // of fanning them out to whichever extension heartbeated last.
+  const extLastHeartbeatByKey = {}; // keyIdx -> last heartbeat ts
+  const extCommandsByKey = {};      // keyIdx -> queued commands array
+  const EXT_TTL = 30_000;           // 30s — extension heartbeat timeout
 
   // ── Upload Blob Store ──
   const uploadBlobs = {};      // blobId -> { base64, filename, mimetype, ts }
@@ -131,9 +134,16 @@ function createApp(opts = {}) {
     catch { return null; }
   }
 
-  function checkAuth(req) {
+  // Returns the index of the API key the caller authenticated with, or -1.
+  // Used for per-key routing so commands land in the right browser's
+  // extension (e.g. main account → Chrome ext, alt account → Brave ext).
+  function getKeyIdx(req) {
     const auth = req.headers.authorization || "";
-    return API_KEYS.some((k) => auth === `Bearer ${k}`);
+    return API_KEYS.findIndex((k) => auth === `Bearer ${k}`);
+  }
+
+  function checkAuth(req) {
+    return getKeyIdx(req) >= 0;
   }
 
   function checkAgentAuth(req) {
@@ -500,13 +510,17 @@ function createApp(opts = {}) {
         const { tabId: tid, command, timeout } = await readBody(req);
         const timeoutMs = Math.min(timeout || 30000, 300000);
 
-        // Check if this is a tab-management command and extension is connected
-        if (shouldRouteToExtension(command.action, extLastHeartbeat, EXT_TTL)) {
-          // Route to extension instead of TM script
+        // Check if this is a tab-management command and extension is connected.
+        // Per-key routing: pick the caller's API key index and only route to
+        // the extension that authenticated with the same key.
+        const callerKeyIdx = getKeyIdx(req);
+        const callerExtHeartbeat = extLastHeartbeatByKey[callerKeyIdx] || 0;
+        if (shouldRouteToExtension(command.action, callerExtHeartbeat, EXT_TTL)) {
           const cmd = { ...command };
           cmd.id = `cmd-${++cmdIdCounter}`;
-          extCommands.push(cmd);
-          console.log(`[Ext Route] ${cmd.action} → extension (cmd=${cmd.id})`);
+          if (!extCommandsByKey[callerKeyIdx]) extCommandsByKey[callerKeyIdx] = [];
+          extCommandsByKey[callerKeyIdx].push(cmd);
+          console.log(`[Ext Route] ${cmd.action} → extension key=${callerKeyIdx} (cmd=${cmd.id})`);
 
           const result = await new Promise((resolve) => {
             const timer = setTimeout(() => {
@@ -552,18 +566,21 @@ function createApp(opts = {}) {
     // ── Extension endpoints (auth required) ──
 
     if (req.method === "POST" && path === "/ext/heartbeat") {
-      if (!checkAuth(req)) return json(res, { error: "Unauthorized" }, 401);
+      const keyIdx = getKeyIdx(req);
+      if (keyIdx < 0) return json(res, { error: "Unauthorized" }, 401);
       try {
         const state = await readBody(req);
-        extLastHeartbeat = Date.now();
-        console.log(`[Ext] Heartbeat — tabs: ${state.tabCount || "?"}`);
+        extLastHeartbeatByKey[keyIdx] = Date.now();
+        console.log(`[Ext] Heartbeat key=${keyIdx} — tabs: ${state.tabCount || "?"}`);
       } catch { /* ignored */ }
       return json(res, { ok: true });
     }
 
     if (req.method === "GET" && path === "/ext/commands") {
-      if (!checkAuth(req)) return json(res, { error: "Unauthorized" }, 401);
-      const cmds = extCommands.splice(0, extCommands.length);
+      const keyIdx = getKeyIdx(req);
+      if (keyIdx < 0) return json(res, { error: "Unauthorized" }, 401);
+      const queue = extCommandsByKey[keyIdx] || [];
+      const cmds = queue.splice(0, queue.length);
       return json(res, { commands: cmds });
     }
 
@@ -578,9 +595,11 @@ function createApp(opts = {}) {
     }
 
     if (req.method === "GET" && path === "/ext/status") {
-      if (!checkAuth(req)) return json(res, { error: "Unauthorized" }, 401);
-      const alive = Date.now() - extLastHeartbeat < EXT_TTL;
-      return json(res, { connected: alive, lastHeartbeat: extLastHeartbeat });
+      const keyIdx = getKeyIdx(req);
+      if (keyIdx < 0) return json(res, { error: "Unauthorized" }, 401);
+      const lastHeartbeat = extLastHeartbeatByKey[keyIdx] || 0;
+      const alive = Date.now() - lastHeartbeat < EXT_TTL;
+      return json(res, { connected: alive, lastHeartbeat, keyIdx });
     }
 
     // ── Cowork endpoints (no auth — called by Chrome extension) ──
@@ -826,7 +845,21 @@ function createApp(opts = {}) {
 
   return {
     server,
-    state: { agentCommands, agentResults, agentTabs, remoteLogs, resultWaiters, extCommands, uploadBlobs, coworkSessions, get extLastHeartbeat() { return extLastHeartbeat; }, set extLastHeartbeat(v) { extLastHeartbeat = v; }, get coworkPending() { return coworkPending; }, set coworkPending(v) { coworkPending = v; } },
+    state: {
+      agentCommands, agentResults, agentTabs, remoteLogs, resultWaiters,
+      extCommandsByKey, extLastHeartbeatByKey,
+      // Backward-compat shims: legacy `extCommands` / `extLastHeartbeat`
+      // alias the primary key (idx 0) so existing tests and consumers keep working.
+      get extCommands() {
+        if (!extCommandsByKey[0]) extCommandsByKey[0] = [];
+        return extCommandsByKey[0];
+      },
+      get extLastHeartbeat() { return extLastHeartbeatByKey[0] || 0; },
+      set extLastHeartbeat(v) { extLastHeartbeatByKey[0] = v; },
+      uploadBlobs, coworkSessions,
+      get coworkPending() { return coworkPending; },
+      set coworkPending(v) { coworkPending = v; },
+    },
     cleanup() {
       for (const t of timers) clearInterval(t);
       // Clear any pending result waiters

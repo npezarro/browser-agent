@@ -640,6 +640,68 @@ describe("GET /ext/status", () => {
   });
 });
 
+// ── Per-key extension routing (main vs alt account) ──
+//
+// When two API keys are configured, each authenticates an extension in a
+// different browser. Commands queued by a CLI caller using key A must reach
+// only the extension that authenticated with key A. This is what lets the
+// daily refresh cron pin to the main browser (Chrome) vs the alt browser
+// (Brave) without one stealing the other's commands.
+describe("Per-key extension routing", () => {
+  const MAIN_KEY = "test-main-key";
+  const ALT_KEY = "test-alt-key";
+  let multiApp;
+  let server;
+  let port;
+
+  before(async () => {
+    multiApp = createApp({ apiKey: [MAIN_KEY, ALT_KEY], _skipTimers: true, coworkDir: path.join(os.tmpdir(), `ba-test-cw-multi-${Date.now()}`), coworkRepo: path.join(os.tmpdir(), `ba-test-repo-multi-${Date.now()}`) });
+    server = multiApp.server.listen(0);
+    port = server.address().port;
+  });
+  after(() => { server.close(); });
+
+  function reqWithKey(key, method, p, body) {
+    return new Promise((resolve, reject) => {
+      const data = body ? JSON.stringify(body) : "";
+      const r = http.request({ hostname: "127.0.0.1", port, path: p, method, headers: { authorization: `Bearer ${key}`, "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data) } }, (res) => {
+        let raw = "";
+        res.on("data", (c) => (raw += c));
+        res.on("end", () => { try { resolve({ status: res.statusCode, body: JSON.parse(raw) }); } catch { resolve({ status: res.statusCode, body: raw }); } });
+      });
+      r.on("error", reject);
+      if (data) r.write(data);
+      r.end();
+    });
+  }
+
+  it("isolates heartbeats per key", async () => {
+    await reqWithKey(MAIN_KEY, "POST", "/ext/heartbeat", { tabCount: 1 });
+    const mainStatus = await reqWithKey(MAIN_KEY, "GET", "/ext/status", null);
+    const altStatus = await reqWithKey(ALT_KEY, "GET", "/ext/status", null);
+    assert.equal(mainStatus.body.connected, true, "main key sees own heartbeat");
+    assert.equal(altStatus.body.connected, false, "alt key does NOT see main's heartbeat");
+  });
+
+  it("queues commands per key — alt key polling does not drain main's queue", async () => {
+    // Mark both extensions alive
+    await reqWithKey(MAIN_KEY, "POST", "/ext/heartbeat", { tabCount: 1 });
+    await reqWithKey(ALT_KEY, "POST", "/ext/heartbeat", { tabCount: 1 });
+    // Queue an openTab via the MAIN key (don't await the result — the test
+    // just verifies the command was queued into the right per-key bucket)
+    const mainPromise = reqWithKey(MAIN_KEY, "POST", "/agent/interactive", { command: { action: "openTab", url: "https://example.com" }, timeout: 100 });
+    await new Promise((r) => setTimeout(r, 30));
+    // Alt's poll should see nothing
+    const altDrain = await reqWithKey(ALT_KEY, "GET", "/ext/commands", null);
+    assert.equal(altDrain.body.commands.length, 0, "alt does not see main's queue");
+    // Main's poll should see the command
+    const mainDrain = await reqWithKey(MAIN_KEY, "GET", "/ext/commands", null);
+    assert.equal(mainDrain.body.commands.length, 1, "main sees its own queue");
+    assert.equal(mainDrain.body.commands[0].action, "openTab");
+    await mainPromise; // let the original interactive call time out cleanly
+  });
+});
+
 // ── Cowork endpoints ──
 
 describe("POST /cowork/heartbeat", () => {
