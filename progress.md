@@ -52,3 +52,6 @@
 - ea920d8 — Document clickAny, CSP limits, React gotchas in CLAUDE.md
 - 87852ac — Add clickAny command + per-command timeout (v1.7.0)
 - 49aa6c1 — Fix textarea Illegal invocation + upload arg-too-long (v1.6.1)
+
+## 2026-05-28 — v2.6.0 Per-Key Routing
+- 895ec78 — Route extension commands per API key so each browser only sees its own queue

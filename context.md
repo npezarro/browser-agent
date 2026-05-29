@@ -97,3 +97,17 @@ Full session closeout: privateContext/deliverables/closeouts/2026-05-07-amex-fhr
 
 ## Active Branch
 `master` (with `claude/learnings-510` one commit ahead for CLAUDE.md docs)
+
+## 2026-05-28 — Per-API-Key Routing
+- Patched `agent-server.js` so heartbeats and command queues are split per-key (`extLastHeartbeatByKey`, `extCommandsByKey`). Before: dual-key support was auth-only — whichever extension heartbeated last received every command, regardless of which key the CLI caller used.
+- New helper `getKeyIdx(req)` returns the matching key index (or -1). `checkAuth(req)` now wraps that for callers that only need bool.
+- `/ext/{heartbeat,commands,status}` and `/agent/interactive`'s extension-routing branch all scope to the caller's key index.
+- Backward-compat shims on `state.extCommands` / `state.extLastHeartbeat` alias key idx 0 so existing tests and consumers keep working.
+- Two new tests under `describe("Per-key extension routing")` verify isolation. 182 → 184 pass.
+- Verified live: main key (`a9a46…`) sees Chrome tabs only (Garmin portal, foodie); alt key (`74ab3…`) sees Brave tabs only (claude.ai, alt-account OAuth callbacks). Confirmed Brave specifically by opening `brave://version/` (Chrome rejects that scheme).
+- Deployed via `./deploy.sh` to VM. Note: `deploy.sh` scp's local `.env` to the VM; if `BROWSER_AGENT_KEY_ALT` is missing locally it'll get clobbered on the VM. Added to local `.env` to prevent recurrence.
+
+Full session closeout: privateContext/deliverables/closeouts/2026-05-28-oauth-refresh-automation.md
+
+## Active Branch
+`master`
