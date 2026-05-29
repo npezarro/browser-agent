@@ -43,6 +43,10 @@
 #   upload <selector> <filepath> [tabId] [--drag-drop]  Upload file to input
 #   ping [tabId]                  Ping browser agent
 #   wait-render [minLen] [timeout] [tabId]  Wait for SPA body to hydrate
+#   screenshot [out] [url] [--full] [--selector CSS] [--format png|jpeg|webp] [--quality N] [--blob]
+#                                 Capture screenshot. --full = whole page (CDP), --selector = element only.
+#                                 --blob returns a relay-hosted URL instead of writing to disk.
+#   see "<question>" [url] [...]  Capture screenshot and ask Claude a question about it
 #
 # Flags (append to click/click-any):
 #   --nth N                       Click the Nth match (default: 1st)
@@ -195,24 +199,133 @@ case "$cmd" in
     ;;
 
   screenshot|capture)
-    # Capture visible tab as PNG. Saves to file.
-    # Usage: browser-cli screenshot [output_path] [url_to_focus]
-    local_output="${1:-/tmp/screenshot-$(date +%s).png}"
-    local_focus_url="${2:-}"
-    local_capture_args='{"action":"captureTab"}'
-    if [ -n "$local_focus_url" ]; then
-      local_capture_args=$(jq -nc --arg u "$local_focus_url" '{action:"captureTab", url:$u}')
+    # Capture a tab as an image. Saves to file by default, or returns a blob URL.
+    # Usage:
+    #   browser-cli screenshot [output_path] [url_to_focus]
+    #   browser-cli screenshot [output_path] [url] [--full] [--selector CSS] [--format png|jpeg|webp] [--quality N] [--blob]
+    local_output=""
+    local_focus_url=""
+    local_full="false"
+    local_selector=""
+    local_format=""
+    local_quality=""
+    local_to_blob="false"
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --full|--fullpage|--full-page) local_full="true"; shift ;;
+        --selector) local_selector="${2:?--selector requires a CSS selector}"; shift 2 ;;
+        --format) local_format="${2:?--format requires png|jpeg|webp}"; shift 2 ;;
+        --quality) local_quality="${2:?--quality requires a number}"; shift 2 ;;
+        --blob) local_to_blob="true"; shift ;;
+        *)
+          if [ -z "$local_output" ]; then local_output="$1"
+          elif [ -z "$local_focus_url" ]; then local_focus_url="$1"
+          fi
+          shift ;;
+      esac
+    done
+
+    # Default format: png unless format/blob specified
+    if [ -z "$local_format" ]; then local_format="png"; fi
+
+    # Default output path (only relevant if not --blob)
+    if [ "$local_to_blob" != "true" ] && [ -z "$local_output" ]; then
+      local_output="/tmp/screenshot-$(date +%s).${local_format}"
     fi
-    result=$(interactive "" "$local_capture_args")
+
+    # Choose action: fast captureTab for viewport+png; CDP captureAdvanced for everything else
+    local_advanced="false"
+    if [ "$local_full" = "true" ] || [ -n "$local_selector" ] || [ "$local_format" = "webp" ] || \
+       { [ "$local_format" = "jpeg" ] && [ -n "$local_quality" ]; }; then
+      local_advanced="true"
+    fi
+
+    if [ "$local_advanced" = "true" ]; then
+      local_action="captureAdvanced"
+    else
+      local_action="captureTab"
+    fi
+
+    # Build command JSON
+    local_capture_args=$(jq -nc \
+      --arg action "$local_action" \
+      --arg url "$local_focus_url" \
+      --arg fmt "$local_format" \
+      --arg sel "$local_selector" \
+      --argjson full "$local_full" \
+      --arg q "$local_quality" \
+      '{action:$action}
+       + (if $url != "" then {url:$url} else {} end)
+       + (if $sel != "" then {selector:$sel} else {} end)
+       + (if $full then {fullPage:true} else {} end)
+       + (if $fmt != "" then {format:$fmt} else {} end)
+       + (if $q != "" then {quality:($q|tonumber)} else {} end)')
+
+    result=$(interactive "" "$local_capture_args" 90)
     dataUrl=$(echo "$result" | jq -r '.result.dataUrl // .dataUrl // empty')
     if [ -z "$dataUrl" ]; then
       echo "ERROR: No screenshot data returned" >&2
       echo "$result" >&2
       exit 1
     fi
-    # Strip data:image/png;base64, prefix and decode
-    echo "$dataUrl" | sed 's/^data:image\/[a-z]*;base64,//' | base64 -d > "$local_output"
-    echo "{\"saved\":\"$local_output\",\"size\":$(stat -c%s "$local_output" 2>/dev/null || stat -f%z "$local_output" 2>/dev/null)}"
+
+    if [ "$local_to_blob" = "true" ]; then
+      # Strip data: prefix, send base64 to relay blob store, return retrieval URL
+      b64=$(echo "$dataUrl" | sed 's/^data:image\/[a-z]*;base64,//')
+      mime=$(echo "$dataUrl" | sed -n 's/^data:\(image\/[a-z]*\);base64,.*/\1/p')
+      [ -z "$mime" ] && mime="image/png"
+      blob_id="shot-$(date +%s)-$$"
+      blob_resp=$(curl -s -m 30 -X POST "$API/agent/upload-blob" \
+        -H "Content-Type: application/json" \
+        -H "$auth_header" \
+        -d "$(jq -nc --arg id "$blob_id" --arg b "$b64" --arg fn "${blob_id}.${local_format}" --arg mt "$mime" \
+              '{blobId:$id, base64:$b, filename:$fn, mimetype:$mt}')")
+      ok=$(echo "$blob_resp" | jq -r '.ok // false')
+      if [ "$ok" != "true" ]; then
+        echo "ERROR: Blob upload failed" >&2
+        echo "$blob_resp" >&2
+        exit 1
+      fi
+      jq -nc --arg id "$blob_id" --arg url "$API/agent/blob/$blob_id" \
+        '{blobId:$id, url:$url, expiresInSec:300, note:"requires X-Agent-Secret header to fetch"}'
+    else
+      # Strip data: prefix, decode to file
+      echo "$dataUrl" | sed 's/^data:image\/[a-z]*;base64,//' | base64 -d > "$local_output"
+      size=$(stat -c%s "$local_output" 2>/dev/null || stat -f%z "$local_output" 2>/dev/null)
+      jq -nc --arg path "$local_output" --argjson size "$size" --arg fmt "$local_format" \
+        '{saved:$path, size:$size, format:$fmt}'
+    fi
+    ;;
+
+  see|vision)
+    # Capture a screenshot and ask Claude a question about it.
+    # Usage: browser-cli see "<question>" [url_to_focus] [--full] [--selector CSS] [--format jpeg|png|webp] [--quality N]
+    local_question="${1:?question required}"
+    shift
+    # Force jpeg unless overridden, for faster vision turnaround
+    set -- "$@" --format "${BROWSER_AGENT_VISION_FORMAT:-jpeg}"
+    tmp_shot="/tmp/see-$(date +%s)-$$.img"
+    # Reuse screenshot logic by recursing into ourselves
+    if ! "$0" screenshot "$tmp_shot" "$@" >/dev/null 2>&1; then
+      "$0" screenshot "$tmp_shot" "$@" >&2 || exit 1
+    fi
+    if [ ! -s "$tmp_shot" ]; then
+      echo "ERROR: capture produced empty file" >&2
+      exit 1
+    fi
+    if ! command -v claude >/dev/null 2>&1; then
+      echo "ERROR: 'claude' CLI not on PATH; cannot answer vision question" >&2
+      echo "{\"capturedTo\":\"$tmp_shot\"}"
+      exit 1
+    fi
+    # Hand the image to claude -p via the Read tool (matches fb-marketplace-poster pattern)
+    claude -p --allowedTools Read <<EOF
+Use the Read tool to view this image: $tmp_shot
+
+Then answer this question about what you see, concisely (no preamble):
+
+$local_question
+EOF
     ;;
 
   ensure)

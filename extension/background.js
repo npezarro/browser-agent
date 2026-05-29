@@ -103,6 +103,9 @@ async function executeCommand(cmd) {
       case "captureTab":
         result = await cmdCaptureTab(cmd);
         break;
+      case "captureAdvanced":
+        result = await cmdCaptureAdvanced(cmd);
+        break;
       case "cdpType":
         result = await cmdCdpType(cmd);
         break;
@@ -229,6 +232,90 @@ async function cmdCaptureTab(cmd) {
     quality: cmd.quality || 90,
   });
   return { dataUrl, chromeTabId: tabId };
+}
+
+/**
+ * Advanced capture via CDP Page.captureScreenshot.
+ * Supports full-page (captureBeyondViewport), element clipping via selector,
+ * and png/jpeg/webp formats.
+ *
+ * cmd: { url?, chromeTabId?, fullPage?, selector?, format?, quality? }
+ */
+async function cmdCaptureAdvanced(cmd) {
+  const tabId = await resolveTabId(cmd);
+  if (!tabId) return { error: "No tab found to capture" };
+
+  // Focus tab so layout/scroll state is correct
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    await chrome.tabs.update(tabId, { active: true });
+    await chrome.windows.update(tab.windowId, { focused: true });
+    await new Promise((r) => setTimeout(r, 300));
+  } catch (_) { /* tab may be gone */ }
+
+  const format = (cmd.format || "png").toLowerCase();
+  if (!["png", "jpeg", "webp"].includes(format)) {
+    return { error: `Unsupported format: ${format} (use png/jpeg/webp)` };
+  }
+  const params = {
+    format,
+    captureBeyondViewport: !!cmd.fullPage,
+  };
+  if (format !== "png" && typeof cmd.quality === "number") {
+    params.quality = Math.max(0, Math.min(100, cmd.quality));
+  } else if (format !== "png") {
+    params.quality = 85;
+  }
+
+  return await withDebugger(tabId, async (target) => {
+    // Resolve selector → clip rect if requested
+    if (cmd.selector) {
+      const sel = String(cmd.selector);
+      const evalRes = await cdp(target, "Runtime.evaluate", {
+        expression: `(() => {
+          const el = document.querySelector(${JSON.stringify(sel)});
+          if (!el) return null;
+          el.scrollIntoView({ block: "start", inline: "start" });
+          const r = el.getBoundingClientRect();
+          const dpr = window.devicePixelRatio || 1;
+          return {
+            x: r.left + window.scrollX,
+            y: r.top + window.scrollY,
+            width: r.width,
+            height: r.height,
+            scale: dpr,
+          };
+        })()`,
+        returnByValue: true,
+      });
+      const rect = evalRes?.result?.value;
+      if (!rect) return { error: `Selector not found: ${sel}` };
+      if (rect.width < 1 || rect.height < 1) {
+        return { error: `Selector matched zero-size element: ${sel}` };
+      }
+      // Brief settle after scrollIntoView
+      await new Promise((r) => setTimeout(r, 200));
+      params.clip = {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+        scale: 1,
+      };
+    }
+
+    const { data } = await cdp(target, "Page.captureScreenshot", params);
+    const mime =
+      format === "jpeg" ? "image/jpeg" :
+      format === "webp" ? "image/webp" : "image/png";
+    return {
+      dataUrl: `data:${mime};base64,${data}`,
+      chromeTabId: tabId,
+      format,
+      fullPage: !!cmd.fullPage,
+      selector: cmd.selector || null,
+    };
+  });
 }
 
 // --- CDP Commands (trusted input via chrome.debugger) ---

@@ -626,6 +626,10 @@ describe("shouldRouteToExtension", () => {
     assert.ok(shouldRouteToExtension("captureTab", NOW - 5000, EXT_TTL, NOW));
   });
 
+  it("routes captureAdvanced to extension", () => {
+    assert.ok(shouldRouteToExtension("captureAdvanced", NOW - 5000, EXT_TTL, NOW));
+  });
+
   it("routes cdpType to extension", () => {
     assert.ok(shouldRouteToExtension("cdpType", NOW - 5000, EXT_TTL, NOW));
   });

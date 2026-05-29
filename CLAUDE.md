@@ -176,6 +176,32 @@ SPAs that use IntersectionObserver-based lazy rendering (e.g., Amex Travel) requ
 
 **focusTab URL matching:** Uses `.includes()` (not `.startsWith()`) so bare domain names match actual tab URLs that include the protocol prefix.
 
+## Screenshot Capture (v2.7.0+)
+
+Two capture paths, both via the extension:
+
+- **Fast path** — `chrome.tabs.captureVisibleTab` (`captureTab` action). Viewport only, png/jpeg. No debugger attach. Used when no advanced flags are passed.
+- **Advanced path** — CDP `Page.captureScreenshot` (`captureAdvanced` action). Supports full-page (`captureBeyondViewport`), element clipping (via `Runtime.evaluate` on `getBoundingClientRect`), and png/jpeg/webp formats. Routed through `withDebugger`.
+
+CLI:
+
+```
+browser-cli screenshot [out] [url] [--full] [--selector CSS] [--format png|jpeg|webp] [--quality N] [--blob]
+```
+
+- `--full` — capture entire scrollable page, not just viewport.
+- `--selector` — capture only the bounding box of the first matching element (scrolls into view first).
+- `--format` / `--quality` — picks the right path automatically; webp/jpeg-with-quality forces CDP.
+- `--blob` — store on the relay (`/agent/upload-blob`, 5min TTL) and return `{blobId, url, expiresInSec}` instead of writing a local file. Retrieval requires `X-Agent-Secret`.
+
+```
+browser-cli see "<question>" [url] [--full] [--selector CSS] [--format jpeg|png|webp] [--quality N]
+```
+
+Captures a screenshot to a temp file, then invokes `claude -p --allowedTools Read` with a prompt that points at the file. Defaults to jpeg for faster vision turnaround (override via `BROWSER_AGENT_VISION_FORMAT`). Pattern matches `fb-marketplace-poster/lib/analyze.js`.
+
+**Routing allowlist:** `captureAdvanced` is in `EXT_TAB_ACTIONS` in `lib/core.js` alongside `captureTab` — required for the server to forward to the extension.
+
 ## Upload Timeout
 
 The `upload` command uses the `TIMEOUT` env var (default 120s) instead of hardcoded timeout. Set `TIMEOUT=300 browser-cli upload ...` for large files.
