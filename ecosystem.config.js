@@ -9,6 +9,7 @@ module.exports = {
       env: {
         NODE_ENV: "production",
         BROWSER_AGENT_PORT: 3102,
+        LIBGL_ALWAYS_SOFTWARE: '1',
       },
     },
   ],
