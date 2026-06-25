@@ -5,6 +5,7 @@
 - Deployed on VM: `~/bin/browser-cli` symlink + `~/bin` added to PATH in `.bashrc`.
 - Verified residential-IP bypass: VM direct `curl` to eBay = HTTP 403; via browser-agent pulled 240 Oura Ring 4 listings and tallied colour/size (used `cdp-eval` for eBay CSP).
 - Docs: CLAUDE.md + context.md sections added; KB `integrations/browser-agent.md` updated (b6bb34c).
+- Deploy-hygiene: VM `~/browser-agent` was ~9 commits behind master with stale-base uncommitted edits (already upstream). Fast-forwarded to master (running relay already == master, no PM2 restart); `vm-browser-cli.sh` marked executable in repo (95917d6). VM now tracks master clean, heap cap + LIBGL config intact.
 
 ## 2026-05-29 — v2.7.0 Screenshot Expansion
 - 1a0fb78 — v2.7.0: full-page + element-clip screenshots, blob output, vision wrapper
