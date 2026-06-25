@@ -1,5 +1,11 @@
 # progress.md — browser-agent
 
+## 2026-06-24 — VM-side CLI client
+- Added `vm-browser-cli.sh` — VM wrapper that sources `~/browser-agent/.env`, points at the loopback relay (`127.0.0.1:3102`), and execs `browser-cli.sh`. `BROWSER_AGENT_PROFILE=alt` → Brave/alt profile.
+- Deployed on VM: `~/bin/browser-cli` symlink + `~/bin` added to PATH in `.bashrc`.
+- Verified residential-IP bypass: VM direct `curl` to eBay = HTTP 403; via browser-agent pulled 240 Oura Ring 4 listings and tallied colour/size (used `cdp-eval` for eBay CSP).
+- Docs: CLAUDE.md + context.md sections added; KB `integrations/browser-agent.md` updated (b6bb34c).
+
 ## 2026-05-29 — v2.7.0 Screenshot Expansion
 - 1a0fb78 — v2.7.0: full-page + element-clip screenshots, blob output, vision wrapper
   - `cmdCaptureAdvanced` in extension/background.js: CDP `Page.captureScreenshot` with `captureBeyondViewport`, selector→`getBoundingClientRect` clip, png/jpeg/webp

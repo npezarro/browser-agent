@@ -1,6 +1,15 @@
 # context.md — browser-agent
 
-Last Updated: 2026-05-28 — multi-key auth for alt-account profile
+Last Updated: 2026-06-24 — VM-side CLI client (residential-IP browsing)
+
+## 2026-06-24 — VM as a browser-agent client
+- The relay runs on the VM but had no CLI client there. Added `vm-browser-cli.sh` (committed) + installed on VM as `~/bin/browser-cli` (symlink to the repo copy). It sources `~/browser-agent/.env`, sets `BROWSER_AGENT_URL=http://127.0.0.1:3102` (loopback), and execs `browser-cli.sh`. `BROWSER_AGENT_PROFILE=alt` swaps to `BROWSER_AGENT_KEY_ALT` (Brave/alt profile).
+- Purpose: VM processes can now drive the home **residential** browser, bypassing datacenter-IP bot blocks. Verified: VM `curl` to eBay = HTTP 403, but via browser-agent it pulled 240 Oura Ring 4 listings (used `cdp-eval`; content-script eval is CSP-blocked on eBay).
+- Discord note: neither automation browser is logged into Discord (both bounce to `/login`); read messages via the bot token + `discord.com/api/v10` instead.
+- Full closeout: `privateContext/deliverables/closeouts/2026-06-24-vm-browser-agent-client.md`
+- State: working.
+
+## 2026-05-28 — multi-key auth for alt-account profile (prior)
 
 ## Current State
 - **Extension v2.5.0** — MV3 content script + background service worker

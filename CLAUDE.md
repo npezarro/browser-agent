@@ -217,6 +217,16 @@ New Reddit (reddit.com) uses Web Components with closed shadow DOM. Content scri
 
 Consumer: `reddit-referral-poster`
 
+## Running from the VM (residential-IP browsing)
+
+The relay runs **on the VM**, but commands execute in the **home** browser. So a VM process can browse from a residential IP, bypassing datacenter-IP bot blocks (e.g. eBay returns `HTTP 403` to the GCP IP directly, but loads fine through the home browser).
+
+`vm-browser-cli.sh` is the VM wrapper: it sources `~/browser-agent/.env` (both keys), sets `BROWSER_AGENT_URL=http://127.0.0.1:3102` (loopback, skips Apache), and execs `browser-cli.sh`. Install on the VM with `ln -sf ~/browser-agent/vm-browser-cli.sh ~/bin/browser-cli`.
+
+- Default routes to the **main** Chrome profile; `BROWSER_AGENT_PROFILE=alt browser-cli ...` routes to the **Brave/alt** profile.
+- Use `cdp-eval`, not `eval`, on CSP-locked sites — content-script eval returns `{"value":"undefined","fallback":"cdp"}`.
+- Neither automation browser is logged into Discord (both redirect to `/login`); read Discord messages via the bot token + `discord.com/api/v10`, not by scraping.
+
 ## TM Scripts Install Page
 
 TM scripts for other projects are hosted at the server's `/tm-scripts/` path (OAuth-gated). The browser-agent itself no longer uses Tampermonkey (migrated to extension content script in v2.0.0).
