@@ -129,5 +129,11 @@ Full session closeout: privateContext/deliverables/closeouts/2026-05-28-oauth-re
 
 Full session closeout: privateContext/deliverables/closeouts/2026-05-29-browser-agent-screenshot-expansion.md
 
+## 2026-06-29 — Window Resizer TM Script Install Page
+- Added Window Resizer userscript entry to `tm-scripts/index.html` and source mapping in `sync-tm-scripts.sh`
+- No server code changes; only static install page files
+- Deployed via `sync-tm-scripts.sh` (install page) + `deploy.sh` (full redeploy, PM2 restarted and saved)
+- State: deployed, online
+
 ## Active Branch
 `master`
