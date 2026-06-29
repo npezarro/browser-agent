@@ -26,6 +26,7 @@ declare -A SOURCES=(
   ["browser-state.user.js"]="$HOME/repos/freeGames/src/local-checkout/browser-state.user.js"
   ["tm-updater.user.js"]="$HOME/repos/freeGames/src/local-checkout/tm-updater.user.js"
   ["guardian-banner-blocker.user.js"]="$HOME/repos/scripts/Guardian Banner Blocker.user.js"
+  ["window-resizer.user.js"]="$HOME/repos/scripts/Window Resizer.user.js"
 )
 
 # Scripts that also need ungated copies at /var/www/html/ root for @updateURL
