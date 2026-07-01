@@ -25,6 +25,7 @@ const {
   pruneBlobs: pruneBlobsCore,
   buildSessionSummary,
   shouldRouteToExtension,
+  translateToExtension,
 } = require("./lib/core");
 
 /**
@@ -67,6 +68,7 @@ function createApp(opts = {}) {
   const extLastHeartbeatByKey = {}; // keyIdx -> last heartbeat ts
   const extCommandsByKey = {};      // keyIdx -> queued commands array
   const EXT_TTL = 30_000;           // 30s — extension heartbeat timeout
+  const TAB_STALE_MS = 10_000;      // userscript tab older than this = throttled (background); divert content cmds to the extension
 
   // ── Upload Blob Store ──
   const uploadBlobs = {};      // blobId -> { base64, filename, mimetype, ts }
@@ -510,24 +512,37 @@ function createApp(opts = {}) {
         const { tabId: tid, command, timeout } = await readBody(req);
         const timeoutMs = Math.min(timeout || 30000, 300000);
 
-        // Check if this is a tab-management command and extension is connected.
-        // Per-key routing: pick the caller's API key index and only route to
-        // the extension that authenticated with the same key.
+        // Route to the MV3 extension (per-key, only the extension that auth'd
+        // with the caller's key) when either:
+        //   (a) it is a native tab-management action the extension owns, or
+        //   (b) it is a content action (eval/navigate/click/type) whose target
+        //       userscript tab is stale — Chrome throttles the userscript's
+        //       background-tab timers, so those commands would otherwise sit
+        //       unpolled and time out; the extension (chrome.debugger, polled
+        //       via chrome.alarms) reaches background tabs reliably.
         const callerKeyIdx = getKeyIdx(req);
         const callerExtHeartbeat = extLastHeartbeatByKey[callerKeyIdx] || 0;
+        const extAlive = Date.now() - callerExtHeartbeat < EXT_TTL;
+
+        let extCmd = null;
         if (shouldRouteToExtension(command.action, callerExtHeartbeat, EXT_TTL)) {
-          const cmd = { ...command };
-          cmd.id = `cmd-${++cmdIdCounter}`;
+          extCmd = { ...command };
+        } else if (extAlive) {
+          extCmd = translateToExtension(command, tid ? agentTabs[tid] : null, TAB_STALE_MS);
+        }
+
+        if (extCmd) {
+          extCmd.id = `cmd-${++cmdIdCounter}`;
           if (!extCommandsByKey[callerKeyIdx]) extCommandsByKey[callerKeyIdx] = [];
-          extCommandsByKey[callerKeyIdx].push(cmd);
-          console.log(`[Ext Route] ${cmd.action} → extension key=${callerKeyIdx} (cmd=${cmd.id})`);
+          extCommandsByKey[callerKeyIdx].push(extCmd);
+          console.log(`[Ext Route] ${command.action}${extCmd.action !== command.action ? `→${extCmd.action}` : ""} key=${callerKeyIdx} (cmd=${extCmd.id}${extCmd.url ? ` url=${extCmd.url}` : ""})`);
 
           const result = await new Promise((resolve) => {
             const timer = setTimeout(() => {
-              delete resultWaiters[cmd.id];
-              resolve({ id: cmd.id, ok: false, error: "Timeout waiting for extension response", timedOut: true });
+              delete resultWaiters[extCmd.id];
+              resolve({ id: extCmd.id, ok: false, error: "Timeout waiting for extension response", timedOut: true });
             }, timeoutMs);
-            resultWaiters[cmd.id] = { resolve, timer, createdAt: Date.now() };
+            resultWaiters[extCmd.id] = { resolve, timer, createdAt: Date.now() };
           });
 
           return json(res, result);

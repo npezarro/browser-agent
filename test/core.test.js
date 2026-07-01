@@ -13,6 +13,7 @@ const {
   pruneBlobs,
   buildSessionSummary,
   shouldRouteToExtension,
+  translateToExtension,
 } = require("../lib/core");
 
 // ── snapshotToMarkdown ──
@@ -672,5 +673,55 @@ describe("shouldRouteToExtension", () => {
   it("returns false for exactly-expired heartbeat", () => {
     // extLastHeartbeat is exactly EXT_TTL ago — not alive
     assert.ok(!shouldRouteToExtension("openTab", NOW - EXT_TTL, EXT_TTL, NOW));
+  });
+});
+
+// ── translateToExtension (background-tab throttle fallback) ──
+
+describe("translateToExtension", () => {
+  const NOW = 1_000_000;
+  const STALE = 10_000;
+  const staleTab = { url: "https://pezant.ca/employ/dashboard", receivedAt: NOW - 60_000 };
+  const freshTab = { url: "https://pezant.ca/employ", receivedAt: NOW - 2_000 };
+
+  it("translates eval on a stale tab to cdpEval with the tab URL", () => {
+    const c = translateToExtension({ action: "eval", code: "location.href" }, staleTab, STALE, NOW);
+    assert.equal(c.action, "cdpEval");
+    assert.equal(c.url, staleTab.url);
+    assert.equal(c.expression, "location.href");
+  });
+
+  it("returns null for a fresh (foreground) tab so the userscript path is kept", () => {
+    assert.equal(translateToExtension({ action: "eval", code: "x" }, freshTab, STALE, NOW), null);
+  });
+
+  it("translates navigate to a cdpEval location change", () => {
+    const c = translateToExtension({ action: "navigate", url: "https://a.com/x" }, staleTab, STALE, NOW);
+    assert.equal(c.action, "cdpEval");
+    assert.match(c.expression, /location\.href=/);
+    assert.match(c.expression, /a\.com\/x/);
+  });
+
+  it("translates click to cdpClick", () => {
+    const c = translateToExtension({ action: "click", text: "Discover" }, staleTab, STALE, NOW);
+    assert.equal(c.action, "cdpClick");
+    assert.equal(c.text, "Discover");
+  });
+
+  it("translates type to cdpType", () => {
+    const c = translateToExtension({ action: "type", selector: "#q", text: "hi" }, staleTab, STALE, NOW);
+    assert.equal(c.action, "cdpType");
+    assert.equal(c.selector, "#q");
+  });
+
+  it("returns null for non-content actions", () => {
+    assert.equal(translateToExtension({ action: "screenshot" }, staleTab, STALE, NOW), null);
+    assert.equal(translateToExtension({ action: "openTab" }, staleTab, STALE, NOW), null);
+  });
+
+  it("falls back to the active tab (no url) when the target tab is unknown", () => {
+    const c = translateToExtension({ action: "eval", code: "x" }, null, STALE, NOW);
+    assert.equal(c.action, "cdpEval");
+    assert.equal(c.url, undefined);
   });
 });
