@@ -4,7 +4,7 @@
 
 "use strict";
 
-const VERSION = "2.1.0";
+const VERSION = "2.2.0";
 const API_BASE = "https://pezant.ca/api/browser-agent";
 const API = API_BASE + "/agent";
 const POLL_MS = 3000;
@@ -701,13 +701,31 @@ async function poll() {
 log(`v${VERSION} loaded on ${window.location.hostname}`);
 post("/heartbeat", getPageStateLite());
 
+// Register this tab's relay id -> its Chrome tab id with the background service
+// worker, so CDP/native commands (screenshot, click, close, focus) can target
+// THIS exact tab instead of the active one. Re-sent periodically because the MV3
+// service worker's in-memory map is dropped when the worker is evicted.
+function registerTab() {
+  try {
+    chrome.runtime?.sendMessage?.(
+      { type: "ba-register-tab", tabId },
+      () => void chrome.runtime?.lastError
+    );
+  } catch {}
+}
+registerTab();
+
 let lastUrl = window.location.href;
+let registerCounter = 0;
 function tick() {
   if (window.location.href !== lastUrl) {
     lastUrl = window.location.href;
     log(`Navigate: ${lastUrl.substring(0, 120)}`);
     post("/heartbeat", getPageStateLite());
+    registerTab(); // re-assert mapping after navigations
   }
+  // Periodically re-register (every ~30s) to survive service-worker eviction.
+  if (++registerCounter % 15 === 0) registerTab();
 
   if (isUserActive()) {
     setTimeout(tick, 2000);

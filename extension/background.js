@@ -10,6 +10,14 @@ let connected = false;
 let pollTimer = null;
 let heartbeatTimer = null;
 
+// Maps the relay's internal tab id (minted in content.js as `<ts>-<rand>`) to the
+// real Chrome numeric tab id. Content scripts register themselves via a
+// `ba-register-tab` message (background reads sender.tab.id). This lets
+// resolveTabId() target the EXACT tab a command names, instead of falling back to
+// whatever tab is merely active — the fix for screenshot/click/close/focus acting
+// on the wrong tab, especially when multiple tabs share a URL.
+const internalToChrome = new Map();
+
 // --- Config ---
 
 async function loadConfig() {
@@ -311,6 +319,7 @@ async function cmdCaptureAdvanced(cmd) {
     return {
       dataUrl: `data:${mime};base64,${data}`,
       chromeTabId: tabId,
+      targetUrl: await tabUrlOf(tabId),
       format,
       fullPage: !!cmd.fullPage,
       selector: cmd.selector || null,
@@ -320,14 +329,28 @@ async function cmdCaptureAdvanced(cmd) {
 
 // --- CDP Commands (trusted input via chrome.debugger) ---
 
-// Helper: find Chrome tab ID by URL match or chromeTabId
+// Helper: find Chrome tab ID for a command. Resolution order (most specific
+// first): explicit chromeTabId, the relay's internal tabId via the registry,
+// URL match, and only then the active-tab fallback. Preferring the internal
+// tabId is what keeps commands on the exact tab they name even when several tabs
+// share a URL (the previous behaviour silently used the active tab).
 async function resolveTabId(cmd) {
   if (cmd.chromeTabId) return cmd.chromeTabId;
+
+  if (cmd.tabId && internalToChrome.has(cmd.tabId)) {
+    const chromeId = internalToChrome.get(cmd.tabId);
+    // Confirm the tab still exists before trusting the mapping.
+    try {
+      await chrome.tabs.get(chromeId);
+      return chromeId;
+    } catch {
+      internalToChrome.delete(cmd.tabId); // stale entry
+    }
+  }
+
   if (cmd.url) {
     const tabs = await chrome.tabs.query({});
-    const match = tabs.find(
-      (t) => t.url && t.url.includes(cmd.url)
-    );
+    const match = tabs.find((t) => t.url && t.url.includes(cmd.url));
     if (match) return match.id;
   }
   // Fallback: active tab (only HTTP/HTTPS — chrome:// tabs can't be debugged)
@@ -337,6 +360,17 @@ async function resolveTabId(cmd) {
     url: ["http://*/*", "https://*/*"],
   });
   return active?.id;
+}
+
+// The URL of a resolved tab, for echoing back in command results so the caller
+// can confirm the command hit the intended tab (never throws).
+async function tabUrlOf(chromeTabId) {
+  try {
+    const t = await chrome.tabs.get(chromeTabId);
+    return t?.url || null;
+  } catch {
+    return null;
+  }
 }
 
 // Attach debugger, run fn, detach
@@ -506,7 +540,7 @@ async function cmdCdpClick(cmd) {
       clickCount: 1,
     });
 
-    return { clicked: true, x, y, method: "cdp" };
+    return { clicked: true, x, y, method: "cdp", targetUrl: await tabUrlOf(tabId) };
   });
 }
 
@@ -942,6 +976,15 @@ function updateBadge() {
 // --- Content Script Messages ---
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  // Register the content script's relay tab id -> its Chrome tab id, so
+  // resolveTabId() can target the exact tab. sender.tab.id is the authoritative
+  // Chrome id of the tab the message came from.
+  if (request.type === "ba-register-tab" && request.tabId && sender.tab?.id) {
+    internalToChrome.set(request.tabId, sender.tab.id);
+    sendResponse({ registered: true, chromeTabId: sender.tab.id });
+    return false;
+  }
+
   if (request.type === "ba-notify") {
     const id = `ba-${Date.now()}`;
     chrome.notifications.create(id, {
@@ -1017,6 +1060,14 @@ chrome.storage.onChanged.addListener((changes, area) => {
 // Service worker wakeup
 chrome.runtime.onInstalled.addListener(() => start());
 chrome.runtime.onStartup.addListener(() => start());
+
+// Drop registry entries for closed tabs so a recycled Chrome tab id can't be
+// mistaken for a stale relay tab id.
+chrome.tabs.onRemoved.addListener((closedId) => {
+  for (const [internalId, chromeId] of internalToChrome) {
+    if (chromeId === closedId) internalToChrome.delete(internalId);
+  }
+});
 
 // Keepalive alarm for MV3 service worker
 chrome.alarms?.create("keepalive", { periodInMinutes: 0.4 });

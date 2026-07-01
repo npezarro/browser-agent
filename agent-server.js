@@ -527,6 +527,17 @@ function createApp(opts = {}) {
         let extCmd = null;
         if (shouldRouteToExtension(command.action, callerExtHeartbeat, EXT_TTL)) {
           extCmd = { ...command };
+          // Attach the caller's target-tab context so the extension acts on THAT
+          // tab, not whatever is merely active. Without this, native/CDP commands
+          // (screenshot, click, close, focus) silently fall back to the active tab
+          // whenever they are given only the relay's internal tab id. The extension
+          // prefers `tabId` (its internal->chrome map) and falls back to `url`.
+          if (tid) {
+            extCmd.tabId = tid;
+            if (!extCmd.url && agentTabs[tid] && agentTabs[tid].url) {
+              extCmd.url = agentTabs[tid].url;
+            }
+          }
         } else if (extAlive) {
           extCmd = translateToExtension(command, tid ? agentTabs[tid] : null, TAB_STALE_MS);
         }
