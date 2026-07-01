@@ -1,5 +1,17 @@
 # progress.md — browser-agent
 
+## 2026-06-30 — Fix background-tab command timeouts (`55d1a74`, `d684356`)
+- Root cause: content actions (eval/navigate/click/type) route to the content-script
+  poll path, which Chrome throttles on background tabs (~1/min) → commands time out.
+- Fix (relay-only, no extension reload): `translateToExtension` in `lib/core.js` maps
+  content cmds → `cdpEval`/`cdpClick`/`cdpType` (resolved by tab URL); `/agent/interactive`
+  diverts to the extension when the target tab is stale (>`TAB_STALE_MS`=10s). Fresh
+  foreground tabs keep the content-script path.
+- 7 new tests (192 total pass). Deployed: scp `agent-server.js`+`lib/core.js` to VM
+  `~/browser-agent` + `pm2 restart browser-agent`; WSL relay restarted. Verified live:
+  eval returned real DOM and navigate executed on previously-timing-out tabs.
+- Full closeout: `privateContext/deliverables/closeouts/2026-06-30-browser-agent-background-tab-throttle-fix.md`
+
 ## 2026-06-24 — VM-side CLI client
 - Added `vm-browser-cli.sh` — VM wrapper that sources `~/browser-agent/.env`, points at the loopback relay (`127.0.0.1:3102`), and execs `browser-cli.sh`. `BROWSER_AGENT_PROFILE=alt` → Brave/alt profile.
 - Deployed on VM: `~/bin/browser-cli` symlink + `~/bin` added to PATH in `.bashrc`.
