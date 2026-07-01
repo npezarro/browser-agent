@@ -1,6 +1,28 @@
 # context.md — browser-agent
 
-Last Updated: 2026-06-24 — VM-side CLI client (residential-IP browsing)
+Last Updated: 2026-06-30 — background-tab throttle fix (content cmds → extension)
+
+## 2026-06-30 — Fix: eval/navigate/click time out on background tabs
+- **Symptom:** `eval`/`navigate`/`ensure` return "Timeout waiting for browser
+  response" or `{value:undefined,fallback:cdp}` even though `/health` shows
+  connected clients and `/agent/tabs` lists fresh tabs. Only the active/foreground
+  tab responds; background tabs time out.
+- **Root cause:** content actions (eval/navigate/click/type) route to the
+  **Tampermonkey userscript** path (`/agent/commands` poll). Chrome throttles the
+  userscript's page timers on background/unfocused tabs to ~1/min, so those
+  commands sit unpolled and time out. Tab-state still looks fresh because any
+  active tab (e.g. auth-callback tabs) keeps polling. The MV3 extension polls via
+  `chrome.alarms` (not throttled) and acts on any tab via `chrome.debugger`.
+- **Fix (server-side only, no extension/userscript update):** `translateToExtension`
+  in `lib/core.js` maps a content command to the extension's CDP equivalent
+  (`cdpEval`/`cdpClick`/`cdpType`), resolving the target tab **by URL** (which the
+  relay already stores per tab). `/agent/interactive` diverts to the extension
+  when the target userscript tab is stale (>`TAB_STALE_MS`=10s); fresh foreground
+  tabs keep the userscript path (no debugger banner). Verified live: eval returns
+  real DOM and navigate executes on tabs that previously timed out. Commit `55d1a74`.
+- **Deploy:** scp `agent-server.js` + `lib/core.js` to the VM relay
+  (`~/browser-agent`) + `pm2 restart browser-agent`; WSL relay restarted too. The
+  VM copy is an scp target (deploy.sh), not kept in git-sync.
 
 ## 2026-06-24 — VM as a browser-agent client
 - The relay runs on the VM but had no CLI client there. Added `vm-browser-cli.sh` (committed) + installed on VM as `~/bin/browser-cli` (symlink to the repo copy). It sources `~/browser-agent/.env`, sets `BROWSER_AGENT_URL=http://127.0.0.1:3102` (loopback), and execs `browser-cli.sh`. `BROWSER_AGENT_PROFILE=alt` swaps to `BROWSER_AGENT_KEY_ALT` (Brave/alt profile).
