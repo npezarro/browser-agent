@@ -67,7 +67,7 @@
   - Parameterized deploy.sh, sync-tm-scripts.sh, browser-cli.sh with env vars
   - agent-server.js cowork paths use $HOME instead of hardcoded user dir
   - Cleaned context.md of Windows paths and privateContext references
-  - Git history rewritten via filter-repo (generatedByTermius -> deployuser, email normalized)
+  - Git history rewritten via filter-repo (old VM username -> deployuser, email normalized)
   - Repo visibility flipped to public
 
 ## 2026-04-10 — v1.8.0 Performance Fixes
