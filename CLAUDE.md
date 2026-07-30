@@ -283,3 +283,20 @@ resolved, never retarget whatever is focused. Three lessons from the 2026-07-30 
 3. **A session-scoped id is not a page id.** The relay tab id lives in the page's
    `sessionStorage` and survives navigation. Cross-check a recorded URL by origin before
    acting, and re-check immediately before attaching.
+
+## A non-composited Chrome throttles the content script, not just captures: use cdp-eval/cdp-click before declaring the browser unreachable
+When the Chrome window is minimized, occluded, or the display is off, browser-agent degrades in a way that mimics a dead browser but is not one.
+
+Symptoms seen together (2026-07-30):
+- 'tabs' still lists the tab with fresh-looking heartbeats (they batch through), so the tab looks healthy.
+- ping, state, text, eval, click ALL return 'Timeout waiting for browser response', on every retry.
+- screenshot fails with 'ERROR: Failed to capture tab: image readback failed' (captureVisibleTab needs a composited surface).
+- ensure, focus, ext-status keep working (service-worker side).
+
+Cause: Chrome throttles timers in backgrounded tabs, stalling the content script's poll loop. The service worker is unaffected.
+
+Rule: do NOT conclude the browser is unreachable from content-script timeouts. Retry the same operation as cdp-eval (alias ce) / cdp-click (cc), which route through background.js/CDP. A full multi-step form (open modal, set a React textarea via the native value setter, submit, reload, verify) was driven entirely with cdp-* against a backgrounded window.
+
+Gotcha: cdp-eval returns its result in a 'value' field alongside targetUrl/resolvedBy. Piping to 'tail -3' cuts the value off and makes a successful call look empty; grep for '"value"' instead.
+
+Related: browser-agent progress.md 2026-07-30 entries; memory rollup_browser_agent_gotchas.

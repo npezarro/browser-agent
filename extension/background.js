@@ -259,16 +259,45 @@ async function cmdCaptureTab(cmd) {
   await chrome.windows.update(windowId, { focused: true });
   await new Promise((r) => setTimeout(r, 500));
 
-  const dataUrl = await chrome.tabs.captureVisibleTab(windowId, {
-    format: cmd.format || "png",
-    quality: cmd.quality || 90,
-  });
-  return {
-    dataUrl,
-    chromeTabId: tabId,
-    targetUrl: tgt.targetUrl,
-    resolvedBy: tgt.resolvedBy,
-  };
+  // captureVisibleTab needs the window to actually be composited. When Chrome is
+  // minimized, occluded, or the display is off it either throws "image readback
+  // failed" or hangs outright — both observed on this machine 2026-07-30. CDP
+  // Page.captureScreenshot has no such constraint, so fall back to it instead of
+  // failing the command. The race covers the hang, which a try/catch cannot.
+  const CAPTURE_TIMEOUT_MS = 8000;
+  try {
+    const dataUrl = await Promise.race([
+      chrome.tabs.captureVisibleTab(windowId, {
+        format: cmd.format || "png",
+        quality: cmd.quality || 90,
+      }),
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`captureVisibleTab timed out after ${CAPTURE_TIMEOUT_MS}ms`)),
+          CAPTURE_TIMEOUT_MS
+        )
+      ),
+    ]);
+    return {
+      dataUrl,
+      chromeTabId: tabId,
+      targetUrl: tgt.targetUrl,
+      resolvedBy: tgt.resolvedBy,
+      method: "captureVisibleTab",
+    };
+  } catch (e) {
+    // Reuse the SAME resolved target — never re-resolve — so the fallback cannot
+    // capture a different tab than the primary attempt aimed at.
+    const viaCdp = await captureViaCdp(cmd, tgt);
+    if (viaCdp.error) {
+      return {
+        error: `captureVisibleTab failed (${e.message}); CDP fallback also failed: ${viaCdp.error}`,
+      };
+    }
+    // Surface the fallback rather than hiding it: a silent switch would mask a
+    // browser that can no longer composite, which is worth knowing about.
+    return { ...viaCdp, method: "cdp-fallback", primaryError: e.message };
+  }
 }
 
 /**
@@ -281,6 +310,18 @@ async function cmdCaptureTab(cmd) {
 async function cmdCaptureAdvanced(cmd) {
   const tgt = await resolveTarget(cmd);
   if (tgt.error) return tgt;
+  return captureViaCdp(cmd, tgt);
+}
+
+/**
+ * CDP Page.captureScreenshot against an ALREADY-RESOLVED target.
+ *
+ * Takes `tgt` instead of resolving again so the captureVisibleTab fallback in
+ * cmdCaptureTab cannot drift to a different tab between the two attempts — a
+ * re-resolve there would reintroduce exactly the wrong-tab class of bug this
+ * file spent v2.9.0-2.10.1 removing.
+ */
+async function captureViaCdp(cmd, tgt) {
   const tabId = tgt.tabId;
 
   // Focus tab so layout/scroll state is correct
