@@ -1,6 +1,42 @@
 # context.md — browser-agent
 
-Last Updated: 2026-06-30 — background-tab throttle fix (content cmds → extension)
+Last Updated: 2026-07-30 — fail-closed tab targeting for CDP commands (security)
+
+## 2026-07-30 — Security: cdp-eval/cdp-click silently ran against the focused tab
+- **Symptom:** `cdp-eval` given an explicit relay tab id returned the content of a
+  completely different, *focused* tab (reported against a `myaccount.google.com`
+  page; reproduced live returning `app.brevo.com/security/authorised_ips`). No
+  error, no signal — the caller could not tell it had read the wrong page.
+- **Impact:** any `cdp-eval`/`cdp-click`/`cdp-type`/`screenshot`/`network-capture`
+  could read or click whatever was focused, including logged-in credential and
+  security-console pages the caller never named.
+- **Root cause — three compounding bugs, not one:**
+  1. `browser-cli.sh` passed `interactive ""` for *every* CDP command, so **no
+     `tabId` ever reached the relay**. The v2.8.0 server-side fix
+     (`agent-server.js` attaching `extCmd.tabId`) was gated on `if (tid)` and was
+     therefore **dead code on this path** — it had been shipped and verified
+     against `screenshot`/`focus`, never against `cdp-*`.
+  2. The CDP commands' optional positional was parsed as a **URL substring**
+     unconditionally, so a tab id was sent as `url:"<tab id>"` and matched no tab.
+  3. `resolveTabId` then fell through to `chrome.tabs.query({active:true})`
+     **silently**, and `cdpEval` echoed no target, so nothing surfaced the miss.
+- **Fix (ext v2.9.0 + relay + CLI):**
+  - `extension/tab-target.js` — new pure `resolveTargetCore`, `importScripts`-ed by
+    the service worker and `require`-d by `node --test`. **Fails closed:** a named
+    target that cannot be resolved returns an error; the active tab is used *only*
+    when the caller named no target at all.
+  - Relay attaches `expectUrl` (the URL it last recorded for that tab id); the
+    extension cross-checks it **by origin** at resolution and again immediately
+    before `chrome.debugger.attach`. Needed because relay tab ids live in the
+    page's `sessionStorage` and **survive navigation** — an id captured on site A
+    still resolves after that tab moved to site B.
+  - `browser-cli.sh:split_target()` classifies the target argument as a relay tab
+    id (`<epoch_ms>-<rand>`) or a URL substring, so tab ids actually reach the relay.
+  - Every CDP result echoes `targetUrl` + `resolvedBy`.
+- **Tests:** `test/tab-targeting.test.js`, 13 cases (205 total pass).
+- **Lesson:** the v2.8.0 fix was real but unreachable. A tab-targeting fix must be
+  verified through the **CLI entry point of each command family**, not just at the
+  layer that was edited.
 
 ## 2026-06-30 — Fix: eval/navigate/click time out on background tabs
 - **Symptom:** `eval`/`navigate`/`ensure` return "Timeout waiting for browser

@@ -1,5 +1,23 @@
 # progress.md — browser-agent
 
+## 2026-07-30 — Fail-closed tab targeting for CDP commands (`d43258f`, ext v2.9.0)
+- Security fix: `cdp-eval` with an explicit tab id returned a *focused* unrelated tab's
+  content (live repro leaked `app.brevo.com/security/authorised_ips`). Any `cdp-*` could
+  read/click a credential page the caller never named.
+- Three compounding causes: (1) `browser-cli.sh` sent `interactive ""` for every CDP
+  command so no `tabId` reached the relay — the v2.8.0 server fix was dead code here;
+  (2) the target positional was parsed as a URL substring, so a tab id matched nothing;
+  (3) `resolveTabId` silently fell back to the active tab and `cdpEval` echoed no target.
+- Fix: new `extension/tab-target.js` (`resolveTargetCore`, pure + unit-tested) fails closed
+  on any unresolvable *named* target; relay sends `expectUrl` and the extension cross-checks
+  it by origin at resolution and pre-attach (relay tab ids live in sessionStorage and survive
+  navigation); `split_target()` in the CLI routes tab ids properly; all CDP results echo
+  `targetUrl` + `resolvedBy`.
+- 13 new tests (205 total pass), lint clean vs baseline. Relay deployed to VM (`pm2 restart
+  browser-agent`, health 200); Windows extension copy synced to 2.9.0.
+- Verified live: old CLI + tab id → `app.brevo.com/security/authorised_ips` (wrong tab);
+  new CLI + same tab id → `https://example.com/` (correct tab).
+
 ## 2026-06-30 — Fix background-tab command timeouts (`55d1a74`, `d684356`)
 - Root cause: content actions (eval/navigate/click/type) route to the content-script
   poll path, which Chrome throttles on background tabs (~1/min) → commands time out.
