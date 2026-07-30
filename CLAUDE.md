@@ -248,10 +248,20 @@ The relay runs **on the VM**, but commands execute in the **home** browser. So a
 
 TM scripts for other projects are hosted at the server's `/tm-scripts/` path (OAuth-gated). The browser-agent itself no longer uses Tampermonkey (migrated to extension content script in v2.0.0).
 
-## Remote-browser tab targeting must fail closed: never silently fall back to the focused tab
-A remote-browser/CDP command that names a target tab must return an ERROR when that target cannot be resolved, never retarget whatever tab happens to be focused. browser-agent's resolveTabId silently fell back to chrome.tabs.query({active:true}), so a cdp-eval given an explicit tab id read a focused security-console page instead (live repro: app.brevo.com/security/authorised_ips). Any cdp-eval/cdp-click could read or click a credential page the caller never named, with no signal.
+## Remote-browser tab targeting must fail closed
 
-Three lessons:
-1. FAIL CLOSED on named targets. An unresolvable named target is an error. An implicit default (active tab) is only legitimate when the caller named nothing at all. Echo what was actually targeted (targetUrl + resolvedBy) so a wrong-tab hit is visible rather than silent.
-2. VERIFY A FIX THROUGH EACH COMMAND FAMILY'S REAL ENTRY POINT. The July 2026 server-side fix for this exact class of bug was correct but DEAD CODE for cdp-*: the CLI passed an empty tab id for every CDP command, so the server's 'if (tid)' guard never fired. It had been verified against screenshot/focus only. Editing the layer where the bug appears is not the same as exercising the path a user actually invokes.
-3. A SESSION-SCOPED ID IS NOT A PAGE ID. browser-agent's relay tab id lives in the page's sessionStorage, so it survives navigation: an id captured on site A still resolves after that tab has moved to site B. Cross-check a recorded URL by origin before acting on a target resolved from such an id, and re-check immediately before attaching (the tab can navigate between resolution and attach).
+Cross-cutting rule, see **Tab Targeting Is Fail-Closed (v2.9.0 ext)** above for the
+implementation. A command that names a target tab must ERROR when that target can't be
+resolved, never retarget whatever is focused. Three lessons from the 2026-07-30 incident:
+
+1. **Fail closed on named targets.** An implicit default (active tab) is legitimate only
+   when the caller named nothing at all. Echo what was actually targeted (`targetUrl`,
+   `resolvedBy`) so a wrong-tab hit is visible rather than silent.
+2. **Verify a fix through each command family's real entry point.** The v2.8.0 fix for this
+   exact bug class was correct but dead code for `cdp-*`: the CLI passed an empty tab id, so
+   the server's `if (tid)` guard never fired. It had been verified against `screenshot`/`focus`
+   only. Editing the layer where the bug appears is not the same as exercising the path a
+   user actually invokes.
+3. **A session-scoped id is not a page id.** The relay tab id lives in the page's
+   `sessionStorage` and survives navigation. Cross-check a recorded URL by origin before
+   acting, and re-check immediately before attaching.
