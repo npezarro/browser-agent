@@ -1,5 +1,37 @@
 # progress.md — browser-agent
 
+## 2026-07-30 — `see` wrote an unreadable `.img` extension (fix rode along in `793bfad`)
+- `browser-cli see` captured to `/tmp/see-<ts>-<pid>.img`. The vision step hands that path
+  to `claude -p --allowedTools Read`, and `.img` is not a recognized image extension, so
+  Read returned raw JFIF bytes as text. **Every `see` invocation had been failing**, not
+  just in degraded conditions.
+- Fixed by deriving the extension from the format (`browser-cli.sh:365-374`):
+  `jpeg|jpg -> .jpg`, everything else uses the format verbatim. Default (unset) is jpeg,
+  so the common path is now `.jpg`.
+- Proven, not assumed: identical JPEG bytes written twice, once `.jpg` and once `.img`.
+  The `.jpg` copy rendered as an image; the `.img` copy dumped ~54k tokens of raw JFIF.
+  Also checked the derivation for unset/jpeg/jpg/png/webp, and `bash -n` is clean.
+- **Provenance note:** this edit was uncommitted in the working tree when a concurrent
+  session committed everything as `793bfad` ("Add remote extension reload..."). The fix is
+  live on `origin/master` but that message does not mention it. Search by content, not message.
+
+### Operational: when the window isn't composited, use `cdp-*` and stop diagnosing
+Complements the `captureTab` "image readback failed" note below. When Chrome is
+minimized/occluded, the failure is not limited to captures — the **content script is
+throttled too**, so its poll loop stalls:
+- `tabs` still lists the tab with fresh-looking heartbeats (they batch through), so the
+  tab looks healthy and the situation reads as "browser is gone". It isn't.
+- `ping`, `state`, `text`, `eval`, `click` all return `Timeout waiting for browser response`
+  on every retry.
+- `ensure`, `focus`, `ext-status` keep working (service-worker side).
+- `cdp-eval` / `cdp-click` keep working throughout. A full multi-step form (open modal, set
+  a React textarea via the native value setter, submit, reload, verify) was driven entirely
+  with `cdp-*` against a backgrounded window on 2026-07-30.
+- Gotcha: `cdp-eval` returns its result in `"value"` alongside `targetUrl`/`resolvedBy`.
+  `| tail -3` cuts the value off and makes a successful call look empty; grep `'"value"'`.
+
+Full session closeout: privateContext/deliverables/closeouts/2026-07-30-brevo-mcp-setup-and-see-bug-fix.md
+
 ## 2026-07-30 — captureTab fail-closed + verified remote reload (`ext v2.10.1`)
 - Found a THIRD instance of the wrong-tab bug, missed by the first pass: `cmdCaptureTab`
   (the plain `screenshot` path) kept its own ad-hoc resolution. Two defects: an

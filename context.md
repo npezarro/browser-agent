@@ -193,5 +193,23 @@ Full session closeout: privateContext/deliverables/closeouts/2026-05-29-browser-
 - Deployed via `sync-tm-scripts.sh` (install page) + `deploy.sh` (full redeploy, PM2 restarted and saved)
 - State: deployed, online
 
+## 2026-07-30 — `see` fixed; `cdp-*` is the fallback when the window isn't composited
+- **What changed:** `browser-cli see` was writing captures to a `.img` extension the vision
+  step cannot render, so the command had never worked. Now derives the extension from
+  `--format` (`browser-cli.sh:365-374`). Verified with an A/B on identical JPEG bytes.
+- **Decision:** the fix rode along inside `793bfad`, whose message covers only ext-reload,
+  because a concurrent session committed the shared working tree. Not rewriting pushed
+  history; recorded here and in `progress.md` so it is findable by content.
+- **Operational rule (the reusable part):** a minimized/occluded Chrome throttles the
+  content script, not just captures. `ping`/`state`/`text`/`eval`/`click` all time out while
+  `tabs` still shows healthy heartbeats. Do NOT conclude the browser is unreachable —
+  retry as `cdp-eval`/`cdp-click`, which run through the service worker and keep working.
+- **Open:** that rule lives in `progress.md` + memory only. It arguably belongs in
+  `CLAUDE.md` so autonomous agents see it without reading history; deliberately not added
+  while a concurrent session held uncommitted extension changes.
+- **State:** working. Fix is on `origin/master`.
+
+Full session closeout: privateContext/deliverables/closeouts/2026-07-30-brevo-mcp-setup-and-see-bug-fix.md
+
 ## Active Branch
 `master`
