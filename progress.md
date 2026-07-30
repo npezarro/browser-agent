@@ -1,5 +1,29 @@
 # progress.md — browser-agent
 
+## 2026-07-30 — captureTab fail-closed + verified remote reload (`ext v2.10.1`)
+- Found a THIRD instance of the wrong-tab bug, missed by the first pass: `cmdCaptureTab`
+  (the plain `screenshot` path) kept its own ad-hoc resolution. Two defects: an
+  unresolvable target fell through to the active tab, and when `chromeTabId` was supplied
+  `windowId` stayed undefined, so the focus block was skipped and
+  `captureVisibleTab(undefined)` captured the FOCUSED tab while the result still reported
+  the requested tab id. It also ignored the internal->chrome registry entirely.
+- Now routes through `resolveTarget`, always resolves `windowId` and foregrounds the
+  target, and echoes `targetUrl` + `resolvedBy`.
+- **Used as the end-to-end test of the `ext-reload` route, both paths verified:**
+  - guard: reload WITHOUT pulling the Windows checkout → came back 2.10.0, `stale:true`,
+    clear error, exit 1.
+  - happy path: pull Windows → `ext-reload` → 2.10.0 → 2.10.1, `stale:false`, exit 0,
+    no chrome://extensions visit.
+  - proof the CODE reloaded (not just the manifest): bogus `chromeTabId` now returns
+    "Refusing to fall back to the active tab" with no `dataUrl`, which only exists in 2.10.1.
+- **Open, pre-existing (not a regression):** `chrome.tabs.captureVisibleTab` returns
+  "image readback failed" / times out in this environment (fires when the Chrome window
+  isn't composited — minimized/occluded/display off). It failed the same way on pre-2.10.1
+  code. The CDP path (`captureAdvanced`, used by `--full`/`--selector`) works fine and
+  returned a correct 14.5KB capture of the named tab. Since plain `screenshot` defaults to
+  `captureTab`, it is effectively broken here; candidate fix is to fall back to the CDP
+  path when `captureVisibleTab` errors.
+
 ## 2026-07-30 — Remote extension reload, `ext-reload` (`793bfad`, ext v2.10.0)
 - Chrome never auto-reloads unpacked extensions, so every extension deploy ended with
   "ask the user to open chrome://extensions". Added a remote route.
