@@ -1,5 +1,22 @@
 # progress.md — browser-agent
 
+## 2026-07-30 — Remote extension reload, `ext-reload` (`793bfad`, ext v2.10.0)
+- Chrome never auto-reloads unpacked extensions, so every extension deploy ended with
+  "ask the user to open chrome://extensions". Added a remote route.
+- `reloadExtension` action calls `chrome.runtime.reload()` (no permissions, callable from
+  an MV3 SW; for unpacked extensions it is treated as an update and re-reads files from
+  disk). Deferred one tick so `executeCommand` POSTs the result before the worker dies.
+- Extension reports its running version on every heartbeat; `/ext/status` returns
+  `version` / `expectedVersion` (read from the checkout's manifest) / `stale`.
+  `stale` is **tri-state** — `null` = running code too old to report a version, which is
+  not the same as up to date. `ext-reload` treats anything but explicit `false` as failure.
+- Limits: cannot bootstrap itself (must exist in the RUNNING version, so one manual reload
+  is still needed once), and cannot revive a dead service worker.
+- Rejected self-hosted CRX auto-update: Chrome now requires an enterprise `ExtensionSettings`
+  force_installed policy for non-Web-Store extensions; changes the extension ID and adds a
+  signing key + update manifest to maintain.
+- 207 tests pass, lint at baseline. Relay deployed to VM (health 200), Windows copy at 2.10.0.
+
 ## 2026-07-30 — Fail-closed tab targeting for CDP commands (`d43258f`, ext v2.9.0)
 - Security fix: `cdp-eval` with an explicit tab id returned a *focused* unrelated tab's
   content (live repro leaked `app.brevo.com/security/authorised_ips`). Any `cdp-*` could
