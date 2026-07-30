@@ -32,6 +32,26 @@ throttled too**, so its poll loop stalls:
 
 Full session closeout: privateContext/deliverables/closeouts/2026-07-30-brevo-mcp-setup-and-see-bug-fix.md
 
+## 2026-07-30 — screenshot: CDP fallback when captureVisibleTab fails (ext v2.10.2)
+- `chrome.tabs.captureVisibleTab` needs the window composited; when Chrome is minimized,
+  occluded, or the display is off it either throws "image readback failed" or hangs. Both
+  observed here, which made plain `browser-cli screenshot` unusable while `--full` /
+  `--selector` (CDP path) worked.
+- Extracted `captureViaCdp(cmd, tgt)` taking an **already-resolved** target;
+  `cmdCaptureAdvanced` and the fallback both call it. Passing the resolved target rather
+  than re-resolving is deliberate — a re-resolve in the fallback could land on a different
+  tab than the primary attempt and would reintroduce the wrong-tab class removed in
+  2.9.0-2.10.1.
+- `cmdCaptureTab` races captureVisibleTab against an 8s timeout (a try/catch alone cannot
+  catch the hang), then falls back. Results carry `method: "captureVisibleTab" | "cdp-fallback"`
+  plus `primaryError`; the switch is surfaced, not hidden. If both fail the error names both.
+- Verified live end-to-end: `{"ok":true,"method":"cdp-fallback","targetUrl":"https://example.com/",
+  "resolvedBy":"registry","primaryError":"Failed to capture tab: image readback failed","bytes":14506}`,
+  and `browser-cli screenshot out.png <tabid>` wrote a valid 1280x569 PNG whose **content was the
+  named tab**, not the focused one (confirmed by viewing the image, not just the byte count).
+- Deployed via the new remote route: relay pulled + restarted, Windows checkout pulled,
+  `ext-reload` 2.10.1 -> 2.10.2, exit 0, no chrome://extensions visit.
+
 ## 2026-07-30 — captureTab fail-closed + verified remote reload (`ext v2.10.1`)
 - Found a THIRD instance of the wrong-tab bug, missed by the first pass: `cmdCaptureTab`
   (the plain `screenshot` path) kept its own ad-hoc resolution. Two defects: an
