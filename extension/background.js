@@ -234,40 +234,41 @@ async function cmdQueryTabs(cmd) {
 }
 
 async function cmdCaptureTab(cmd) {
-  // Find the tab to capture — by chromeTabId or URL, or use the active tab
-  let tabId = cmd.chromeTabId;
-  let windowId;
-  if (!tabId && cmd.url) {
-    const tabs = await chrome.tabs.query({});
-    const match = tabs.find((t) => t.url && t.url.startsWith(cmd.url));
-    if (match) {
-      tabId = match.id;
-      windowId = match.windowId;
-    }
-  }
-  if (!tabId) {
-    // Fallback: capture active tab in current window
-    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (active) {
-      tabId = active.id;
-      windowId = active.windowId;
-    }
-  }
-  if (!tabId) return { error: "No tab found to capture" };
+  // Use the same fail-closed resolver as the CDP commands. This path used to do
+  // its own chromeTabId-or-URL lookup and carried two silent wrong-tab bugs:
+  //   1. an unresolvable target fell through to the active tab, and
+  //   2. when `chromeTabId` was supplied, `windowId` stayed undefined, so the
+  //      focus block was skipped and captureVisibleTab(undefined) grabbed the
+  //      FOCUSED tab — while the result still reported the requested tab id.
+  // A screenshot that misreports what it captured is the worst version of this
+  // bug class, since the image is the evidence.
+  const tgt = await resolveTarget(cmd);
+  if (tgt.error) return tgt;
+  const tabId = tgt.tabId;
 
-  // Focus the tab first so captureVisibleTab captures the right content
-  if (windowId) {
-    await chrome.tabs.update(tabId, { active: true });
-    await chrome.windows.update(windowId, { focused: true });
-    // Brief delay for render
-    await new Promise((r) => setTimeout(r, 500));
+  let windowId;
+  try {
+    windowId = (await chrome.tabs.get(tabId)).windowId;
+  } catch (e) {
+    return { error: `Tab ${tabId} not found: ${e.message}` };
   }
+
+  // captureVisibleTab grabs whatever is VISIBLE in the window, so the target has
+  // to be foregrounded first — this is not optional.
+  await chrome.tabs.update(tabId, { active: true });
+  await chrome.windows.update(windowId, { focused: true });
+  await new Promise((r) => setTimeout(r, 500));
 
   const dataUrl = await chrome.tabs.captureVisibleTab(windowId, {
     format: cmd.format || "png",
     quality: cmd.quality || 90,
   });
-  return { dataUrl, chromeTabId: tabId };
+  return {
+    dataUrl,
+    chromeTabId: tabId,
+    targetUrl: tgt.targetUrl,
+    resolvedBy: tgt.resolvedBy,
+  };
 }
 
 /**
