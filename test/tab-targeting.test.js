@@ -126,3 +126,17 @@ test("every named-target failure keeps the caller off the credential tab", () =>
     assert.strictEqual(out.tabId, undefined, `leaked a tab for ${JSON.stringify(cmd)}`);
   }
 });
+
+// --- Remote extension reload routing ---
+
+const { shouldRouteToExtension } = require("../lib/core.js");
+
+test("reloadExtension routes to the extension when it is alive", () => {
+  const now = Date.now();
+  assert.strictEqual(shouldRouteToExtension("reloadExtension", now, 60000, now), true);
+});
+
+test("reloadExtension does not route when the extension is dead", () => {
+  const now = Date.now();
+  assert.strictEqual(shouldRouteToExtension("reloadExtension", now - 120000, 60000, now), false);
+});

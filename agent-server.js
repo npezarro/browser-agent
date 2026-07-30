@@ -39,6 +39,22 @@ const {
  * @param {string} [opts.coworkWebhook] - Discord webhook URL for cowork notifications
  * @returns {{ server: http.Server, state: object, cleanup: () => void }}
  */
+// The extension version this checkout ships. Cached for 10s so /ext/status stays
+// cheap. Returns null when the manifest isn't alongside the server (the VM copy
+// has it, since the whole repo is deployed there).
+let extVersionCache = { at: 0, value: null };
+function readExtensionVersion() {
+  if (Date.now() - extVersionCache.at < 10000) return extVersionCache.value;
+  let value = null;
+  try {
+    value = JSON.parse(
+      fs.readFileSync(pathMod.join(__dirname, "extension", "manifest.json"), "utf8")
+    ).version || null;
+  } catch { /* manifest not deployed alongside the server */ }
+  extVersionCache = { at: Date.now(), value };
+  return value;
+}
+
 function createApp(opts = {}) {
   const API_KEYS = (Array.isArray(opts.apiKey) ? opts.apiKey : [opts.apiKey]).filter(Boolean);
   const AGENT_SECRETS = (Array.isArray(opts.agentSecret) ? opts.agentSecret : [opts.agentSecret]).filter(Boolean);
@@ -66,6 +82,7 @@ function createApp(opts = {}) {
   // account) can route commands to the matching browser's extension instead
   // of fanning them out to whichever extension heartbeated last.
   const extLastHeartbeatByKey = {}; // keyIdx -> last heartbeat ts
+  const extVersionByKey = {};       // keyIdx -> running extension version
   const extCommandsByKey = {};      // keyIdx -> queued commands array
   const EXT_TTL = 30_000;           // 30s — extension heartbeat timeout
   const TAB_STALE_MS = 10_000;      // userscript tab older than this = throttled (background); divert content cmds to the extension
@@ -600,7 +617,11 @@ function createApp(opts = {}) {
       try {
         const state = await readBody(req);
         extLastHeartbeatByKey[keyIdx] = Date.now();
-        console.log(`[Ext] Heartbeat key=${keyIdx} — tabs: ${state.tabCount || "?"}`);
+        // The version the browser is actually RUNNING. Chrome does not auto-reload
+        // unpacked extensions, so this drifts from the repo after every deploy;
+        // surfacing it is what makes `ext-reload` verifiable instead of hopeful.
+        if (state.version) extVersionByKey[keyIdx] = state.version;
+        console.log(`[Ext] Heartbeat key=${keyIdx} — tabs: ${state.tabCount || "?"} v${state.version || "?"}`);
       } catch { /* ignored */ }
       return json(res, { ok: true });
     }
@@ -628,7 +649,17 @@ function createApp(opts = {}) {
       if (keyIdx < 0) return json(res, { error: "Unauthorized" }, 401);
       const lastHeartbeat = extLastHeartbeatByKey[keyIdx] || 0;
       const alive = Date.now() - lastHeartbeat < EXT_TTL;
-      return json(res, { connected: alive, lastHeartbeat, keyIdx });
+      // `expectedVersion` is what this checkout says should be running; a mismatch
+      // with `version` means the browser is on stale code and needs `ext-reload`.
+      const expectedVersion = readExtensionVersion();
+      return json(res, {
+        connected: alive,
+        lastHeartbeat,
+        keyIdx,
+        version: extVersionByKey[keyIdx] || null,
+        expectedVersion,
+        stale: !!(extVersionByKey[keyIdx] && expectedVersion && extVersionByKey[keyIdx] !== expectedVersion),
+      });
     }
 
     // ── Cowork endpoints (no auth — called by Chrome extension) ──

@@ -15,7 +15,8 @@
 #   open --bg <url>              Open URL in background tab (extension required)
 #   close [tabId]                 Close tab
 #   focus <url>                   Focus tab by URL (extension required)
-#   ext-status                    Check companion extension connection
+#   ext-status                    Check companion extension connection + version drift
+#   ext-reload                    Reload the extension remotely (no chrome://extensions visit)
 #   ensure <url> [wait_s]         Reuse or open tab for URL, return tabId
 #   back [tabId]                  Go back
 #   reload [tabId]                Reload page
@@ -222,8 +223,31 @@ case "$cmd" in
     ;;
 
   ext-status)
-    # Check if companion extension is connected
+    # Check if companion extension is connected. `stale:true` means the browser is
+    # running older code than this checkout ships — run `ext-reload`.
     curl -s "$API/ext/status" -H "$auth_header" | jq .
+    ;;
+
+  ext-reload)
+    # Reload the extension remotely, so a deployed change takes effect without
+    # anyone opening chrome://extensions. Pull the Windows checkout FIRST (Chrome
+    # loads from there, not WSL) or this just reloads the same code.
+    interactive "" '{"action":"reloadExtension"}' 15 || true
+    echo "Waiting for the extension to come back..." >&2
+    for _ in $(seq 15); do
+      sleep 2
+      status=$(curl -s "$API/ext/status" -H "$auth_header")
+      if [ "$(echo "$status" | jq -r '.connected')" = "true" ]; then
+        echo "$status" | jq .
+        [ "$(echo "$status" | jq -r '.stale')" = "true" ] && {
+          echo "WARNING: still stale — is the Windows checkout pulled?" >&2
+          exit 1
+        }
+        exit 0
+      fi
+    done
+    echo "ERROR: extension did not reconnect within 30s" >&2
+    exit 1
     ;;
 
   screenshot|capture)
@@ -335,8 +359,16 @@ case "$cmd" in
     local_question="${1:?question required}"
     shift
     # Force jpeg unless overridden, for faster vision turnaround
-    set -- "$@" --format "${BROWSER_AGENT_VISION_FORMAT:-jpeg}"
-    tmp_shot="/tmp/see-$(date +%s)-$$.img"
+    local_vision_fmt="${BROWSER_AGENT_VISION_FORMAT:-jpeg}"
+    set -- "$@" --format "$local_vision_fmt"
+    # The temp file extension must match the format. The vision step reads the
+    # file with the Read tool, which only renders recognized image extensions;
+    # a generic .img suffix comes back as raw bytes and the question fails.
+    case "$local_vision_fmt" in
+      jpeg|jpg) local_vision_ext="jpg" ;;
+      *)        local_vision_ext="$local_vision_fmt" ;;
+    esac
+    tmp_shot="/tmp/see-$(date +%s)-$$.${local_vision_ext}"
     # Reuse screenshot logic by recursing into ourselves
     if ! "$0" screenshot "$tmp_shot" "$@" >/dev/null 2>&1; then
       "$0" screenshot "$tmp_shot" "$@" >&2 || exit 1

@@ -27,7 +27,25 @@ browser-cli.sh → (HTTPS) → agent-server.js (VM:3102) → (poll) → extensio
 bash deploy.sh   # copies files to VM, restarts PM2
 ```
 
-After deploy, reload the extension in Chrome (`chrome://extensions` > Browser Agent > reload icon).
+After deploy, reload the extension. **Prefer the remote path — no chrome://extensions visit needed:**
+
+```bash
+cd /mnt/c/Users/npeza/Documents/repos/browser-agent && git pull   # Chrome loads from HERE, not WSL
+browser-cli ext-reload                                            # chrome.runtime.reload() via the relay
+```
+
+`ext-reload` blocks until the extension reconnects and exits non-zero if it comes back still stale.
+`ext-status` reports `version` (what the browser is running) vs `expectedVersion` (what this checkout
+ships) plus a `stale` boolean, so post-deploy drift is visible rather than assumed.
+
+Manual fallback (`chrome://extensions` > Browser Agent > reload icon) is only needed to **bootstrap**:
+`ext-reload` must already exist in the *running* version, so a browser on pre-2.10.0 code needs one
+manual reload. It also can't recover an extension whose service worker is dead — `ext-status` shows
+`connected:false` in that case.
+
+Why this works: for an unpacked extension `chrome.runtime.reload()` is treated as an update and
+re-reads every file from disk. It needs no permissions and is callable from an MV3 service worker.
+Pulling the Windows checkout first is what makes it pick up new code rather than reload the same code.
 
 **Version bump:** Always increment the version in `extension/manifest.json` when changing extension files (background.js, content.js, popup.html). The user checks the version number in chrome://extensions after reloading to confirm the new code loaded. Use semver: patch for fixes, minor for new features.
 

@@ -60,6 +60,9 @@ async function sendHeartbeat() {
       type: "extension",
       tabCount: tabs.length,
       ts: Date.now(),
+      // Chrome never auto-reloads an unpacked extension, so the relay needs to be
+      // told which code is actually running to detect post-deploy drift.
+      version: chrome.runtime.getManifest().version,
     });
     if (!connected) {
       connected = true;
@@ -135,6 +138,9 @@ async function executeCommand(cmd) {
       case "extractVirtual":
         result = await cmdExtractVirtual(cmd);
         break;
+      case "reloadExtension":
+        result = await cmdReloadExtension();
+        break;
       default:
         result = { error: `Unknown extension command: ${cmd.action}` };
     }
@@ -188,6 +194,25 @@ async function cmdFocusTab(cmd) {
   const tab = await chrome.tabs.update(tabId, { active: true });
   await chrome.windows.update(tab.windowId, { focused: true });
   return { focused: true, chromeTabId: tabId };
+}
+
+/**
+ * Reload this extension so a deployed code change takes effect without anyone
+ * opening chrome://extensions.
+ *
+ * For an unpacked extension chrome.runtime.reload() is treated as an update and
+ * re-reads every file from disk, so the Windows checkout must already be pulled
+ * (see the WSL/Windows sync rule in CLAUDE.md) or this reloads the same code.
+ * `ext-status` reports `version` vs `expectedVersion` to confirm afterwards.
+ *
+ * The reload is deferred one tick so executeCommand can POST this result first —
+ * reloading tears down the service worker mid-flight, and a synchronous reload
+ * would leave the caller waiting for a result that can never arrive.
+ */
+async function cmdReloadExtension() {
+  const from = chrome.runtime.getManifest().version;
+  setTimeout(() => chrome.runtime.reload(), 500);
+  return { reloading: true, fromVersion: from };
 }
 
 async function cmdQueryTabs(cmd) {
