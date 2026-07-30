@@ -239,11 +239,14 @@ case "$cmd" in
       status=$(curl -s "$API/ext/status" -H "$auth_header")
       if [ "$(echo "$status" | jq -r '.connected')" = "true" ]; then
         echo "$status" | jq .
-        [ "$(echo "$status" | jq -r '.stale')" = "true" ] && {
-          echo "WARNING: still stale — is the Windows checkout pulled?" >&2
-          exit 1
-        }
-        exit 0
+        # `stale` is tri-state: null means the extension is too old to report its
+        # version, which after a reload means the reload did not take. Treat
+        # anything that isn't an explicit `false` as a failure.
+        case "$(echo "$status" | jq -r '.stale')" in
+          false) exit 0 ;;
+          true)  echo "ERROR: reloaded but still stale — pull the Windows checkout at /mnt/c/Users/npeza/Documents/repos/browser-agent" >&2; exit 1 ;;
+          *)     echo "ERROR: extension did not report a version — it is still running pre-2.10.0 code; one manual chrome://extensions reload is needed to bootstrap" >&2; exit 1 ;;
+        esac
       fi
     done
     echo "ERROR: extension did not reconnect within 30s" >&2

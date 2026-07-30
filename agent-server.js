@@ -652,13 +652,19 @@ function createApp(opts = {}) {
       // `expectedVersion` is what this checkout says should be running; a mismatch
       // with `version` means the browser is on stale code and needs `ext-reload`.
       const expectedVersion = readExtensionVersion();
+      const running = extVersionByKey[keyIdx] || null;
       return json(res, {
         connected: alive,
         lastHeartbeat,
         keyIdx,
-        version: extVersionByKey[keyIdx] || null,
+        version: running,
         expectedVersion,
-        stale: !!(extVersionByKey[keyIdx] && expectedVersion && extVersionByKey[keyIdx] !== expectedVersion),
+        // Tri-state on purpose: null means "can't tell" (the running extension is
+        // old enough that it doesn't report its version), which is NOT the same as
+        // "up to date". Reporting false here would hide exactly the drift this
+        // field exists to catch.
+        stale:
+          !running || !expectedVersion ? null : running !== expectedVersion,
       });
     }
 
