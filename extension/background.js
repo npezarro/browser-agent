@@ -1,6 +1,9 @@
 // Browser Agent Tab Manager — Background Service Worker
 // Polls relay server for tab-management commands, executes via chrome.tabs API
 
+// Pure tab-target resolution, shared with `node --test` (see tab-target.js).
+importScripts("tab-target.js");
+
 const POLL_MS = 2000;
 const HEARTBEAT_MS = 10000;
 
@@ -250,8 +253,9 @@ async function cmdCaptureTab(cmd) {
  * cmd: { url?, chromeTabId?, fullPage?, selector?, format?, quality? }
  */
 async function cmdCaptureAdvanced(cmd) {
-  const tabId = await resolveTabId(cmd);
-  if (!tabId) return { error: "No tab found to capture" };
+  const tgt = await resolveTarget(cmd);
+  if (tgt.error) return tgt;
+  const tabId = tgt.tabId;
 
   // Focus tab so layout/scroll state is correct
   try {
@@ -319,47 +323,37 @@ async function cmdCaptureAdvanced(cmd) {
     return {
       dataUrl: `data:${mime};base64,${data}`,
       chromeTabId: tabId,
-      targetUrl: await tabUrlOf(tabId),
+      targetUrl: tgt.targetUrl,
+      resolvedBy: tgt.resolvedBy,
       format,
       fullPage: !!cmd.fullPage,
       selector: cmd.selector || null,
     };
-  });
+  }, cmd.expectUrl);
 }
 
 // --- CDP Commands (trusted input via chrome.debugger) ---
 
-// Helper: find Chrome tab ID for a command. Resolution order (most specific
-// first): explicit chromeTabId, the relay's internal tabId via the registry,
-// URL match, and only then the active-tab fallback. Preferring the internal
-// tabId is what keeps commands on the exact tab they name even when several tabs
-// share a URL (the previous behaviour silently used the active tab).
-async function resolveTabId(cmd) {
-  if (cmd.chromeTabId) return cmd.chromeTabId;
-
-  if (cmd.tabId && internalToChrome.has(cmd.tabId)) {
-    const chromeId = internalToChrome.get(cmd.tabId);
-    // Confirm the tab still exists before trusting the mapping.
-    try {
-      await chrome.tabs.get(chromeId);
-      return chromeId;
-    } catch {
-      internalToChrome.delete(cmd.tabId); // stale entry
-    }
-  }
-
-  if (cmd.url) {
-    const tabs = await chrome.tabs.query({});
-    const match = tabs.find((t) => t.url && t.url.includes(cmd.url));
-    if (match) return match.id;
-  }
-  // Fallback: active tab (only HTTP/HTTPS — chrome:// tabs can't be debugged)
+/**
+ * Resolve the Chrome tab a command may act on, against live tab state.
+ * Returns { tabId, resolvedBy, targetUrl } or { error, resolvedBy }.
+ */
+async function resolveTarget(cmd) {
+  const tabs = await chrome.tabs.query({});
   const [active] = await chrome.tabs.query({
     active: true,
     currentWindow: true,
     url: ["http://*/*", "https://*/*"],
   });
-  return active?.id;
+  const out = resolveTargetCore(cmd, tabs, internalToChrome, active?.id);
+
+  // Evict a registry entry that pointed at a tab which no longer exists, so the
+  // next call re-registers instead of retrying a dead mapping.
+  if (out.error && cmd.tabId && internalToChrome.has(cmd.tabId)) {
+    const chromeId = internalToChrome.get(cmd.tabId);
+    if (!tabs.some((t) => t.id === chromeId)) internalToChrome.delete(cmd.tabId);
+  }
+  return out;
 }
 
 // The URL of a resolved tab, for echoing back in command results so the caller
@@ -373,8 +367,21 @@ async function tabUrlOf(chromeTabId) {
   }
 }
 
-// Attach debugger, run fn, detach
-async function withDebugger(tabId, fn) {
+/**
+ * Pre-attach guard for the handlers that drive chrome.debugger by hand
+ * (cdpEval / cdpNetworkCapture / extractVirtual). Mirrors the check inside
+ * withDebugger: a tab can navigate between resolution and attach, and the
+ * debugger must never land on an origin the caller did not name.
+ */
+async function guardTarget(tabId, expectUrl) {
+  if (!expectUrl) return null;
+  return originMismatch(expectUrl, await tabUrlOf(tabId));
+}
+
+// Attach debugger, run fn, detach. `expectUrl` is re-checked immediately before
+// attaching: a tab can navigate between resolution and attach, and the debugger
+// must never land on an origin the caller did not name.
+async function withDebugger(tabId, fn, expectUrl) {
   if (!tabId) return { error: "No debuggable tab found. Specify a target URL or ensure an HTTP/HTTPS tab is active." };
   // Validate tab URL is debuggable (chrome://, about:, edge:// cannot be debugged)
   try {
@@ -382,6 +389,8 @@ async function withDebugger(tabId, fn) {
     if (tab.url && /^(chrome|chrome-extension|about|edge):/.test(tab.url)) {
       return { error: `Cannot debug internal browser page (${tab.url}). Navigate to an HTTP/HTTPS page first.` };
     }
+    const mismatch = originMismatch(expectUrl, tab.url);
+    if (mismatch) return mismatch;
   } catch (e) {
     return { error: `Tab ${tabId} not found: ${e.message}` };
   }
@@ -406,8 +415,9 @@ function cdp(target, method, params = {}) {
  * cmd: { url?, chromeTabId?, text, selector?, delay? }
  */
 async function cmdCdpType(cmd) {
-  const tabId = await resolveTabId(cmd);
-  if (!tabId) return { error: "Tab not found" };
+  const tgt = await resolveTarget(cmd);
+  if (tgt.error) return tgt;
+  const tabId = tgt.tabId;
 
   return withDebugger(tabId, async (target) => {
     // If a selector is provided, focus it first via DOM methods
@@ -486,8 +496,8 @@ async function cmdCdpType(cmd) {
       await new Promise((r) => setTimeout(r, delay));
     }
 
-    return { typed: true, length: cmd.text.length, method: "cdp-keyevent" };
-  });
+    return { typed: true, length: cmd.text.length, method: "cdp-keyevent", targetUrl: tgt.targetUrl, resolvedBy: tgt.resolvedBy };
+  }, cmd.expectUrl);
 }
 
 /**
@@ -497,8 +507,9 @@ async function cmdCdpType(cmd) {
  * cmd: { url?, chromeTabId?, selector, x?, y? }
  */
 async function cmdCdpClick(cmd) {
-  const tabId = await resolveTabId(cmd);
-  if (!tabId) return { error: "Tab not found" };
+  const tgt = await resolveTarget(cmd);
+  if (tgt.error) return tgt;
+  const tabId = tgt.tabId;
 
   return withDebugger(tabId, async (target) => {
     // Get element position
@@ -540,8 +551,8 @@ async function cmdCdpClick(cmd) {
       clickCount: 1,
     });
 
-    return { clicked: true, x, y, method: "cdp", targetUrl: await tabUrlOf(tabId) };
-  });
+    return { clicked: true, x, y, method: "cdp", targetUrl: tgt.targetUrl, resolvedBy: tgt.resolvedBy };
+  }, cmd.expectUrl);
 }
 
 /**
@@ -551,8 +562,9 @@ async function cmdCdpClick(cmd) {
  * cmd: { url?, chromeTabId?, expression }
  */
 async function cmdCdpEval(cmd) {
-  const tabId = await resolveTabId(cmd);
-  if (!tabId) return { error: "Tab not found" };
+  const tgt = await resolveTarget(cmd);
+  if (tgt.error) return tgt;
+  const tabId = tgt.tabId;
 
   // Focus the tab before eval (needed for virtual rendering / IntersectionObserver)
   if (cmd.focus) {
@@ -565,6 +577,9 @@ async function cmdCdpEval(cmd) {
   }
 
   // Use manual debugger management with guaranteed cleanup timeout
+  const drift = await guardTarget(tabId, cmd.expectUrl);
+  if (drift) return drift;
+
   const target = { tabId };
   await chrome.debugger.attach(target, "1.3");
 
@@ -608,7 +623,7 @@ async function cmdCdpEval(cmd) {
     if (result.exceptionDetails) {
       return { error: result.exceptionDetails.text || "Eval error" };
     }
-    return { value: result.result.value };
+    return { value: result.result.value, targetUrl: tgt.targetUrl, resolvedBy: tgt.resolvedBy };
   } finally {
     clearTimeout(safetyTimer);
     cleanup();
@@ -622,8 +637,9 @@ async function cmdCdpEval(cmd) {
  * cmd: { url?, chromeTabId?, keys: [{key, code, keyCode}] }
  */
 async function cmdCdpKeys(cmd) {
-  const tabId = await resolveTabId(cmd);
-  if (!tabId) return { error: "Tab not found" };
+  const tgt = await resolveTarget(cmd);
+  if (tgt.error) return tgt;
+  const tabId = tgt.tabId;
 
   return withDebugger(tabId, async (target) => {
     for (const k of cmd.keys) {
@@ -641,8 +657,8 @@ async function cmdCdpKeys(cmd) {
       });
       await new Promise((r) => setTimeout(r, k.delay || 100));
     }
-    return { sent: true, count: cmd.keys.length };
-  });
+    return { sent: true, count: cmd.keys.length, targetUrl: tgt.targetUrl, resolvedBy: tgt.resolvedBy };
+  }, cmd.expectUrl);
 }
 
 /**
@@ -652,8 +668,9 @@ async function cmdCdpKeys(cmd) {
  * cmd: { url?, chromeTabId?, urlPattern, reload?, timeout?, maxLen?, maxCaptures? }
  */
 async function cmdCdpNetworkCapture(cmd) {
-  const tabId = await resolveTabId(cmd);
-  if (!tabId) return { error: "Tab not found" };
+  const tgt = await resolveTarget(cmd);
+  if (tgt.error) return tgt;
+  const tabId = tgt.tabId;
 
   // Focus tab first
   try {
@@ -661,6 +678,9 @@ async function cmdCdpNetworkCapture(cmd) {
     await chrome.tabs.update(tabId, { active: true });
     await chrome.windows.update(tab.windowId, { focused: true });
   } catch (_) { /* best effort */ }
+
+  const drift = await guardTarget(tabId, cmd.expectUrl);
+  if (drift) return drift;
 
   const target = { tabId };
   await chrome.debugger.attach(target, "1.3");
@@ -732,9 +752,10 @@ async function cmdCdpNetworkCapture(cmd) {
     }
 
     const results = await responsePromise;
+    const meta = { targetUrl: tgt.targetUrl, resolvedBy: tgt.resolvedBy };
     return listOnly
-      ? { urlCount: results.length, urls: results }
-      : { captured: results.length, responses: results };
+      ? { urlCount: results.length, urls: results, ...meta }
+      : { captured: results.length, responses: results, ...meta };
   } finally {
     await chrome.debugger.detach(target).catch(() => {});
   }
@@ -748,13 +769,14 @@ async function cmdCdpNetworkCapture(cmd) {
  * cmd: { url?, chromeTabId?, selector (container), extract (JS expression), waitMs? }
  */
 async function cmdExtractVirtual(cmd) {
-  const tabId = await resolveTabId(cmd);
-  if (!tabId) return { error: "Tab not found" };
+  const tgt = await resolveTarget(cmd);
+  if (tgt.error) return tgt;
+  const tabId = tgt.tabId;
 
   const selector = cmd.selector || "[data-testid='hotels-list']";
   const extract = cmd.extract || "var h=document.querySelector('" + selector.replace(/'/g, "\\'") + "');var html=h?h.innerHTML:'';var m=html.match(/aria-label=\"Select Hotel [^\"]+\"/g);m?m.join('|||'):'NONE'";
   const waitMs = cmd.waitMs || 2000;
-  const results = { approaches: {} };
+  const results = { approaches: {}, targetUrl: tgt.targetUrl, resolvedBy: tgt.resolvedBy };
 
   // Step 1: Focus the tab
   try {
@@ -763,6 +785,9 @@ async function cmdExtractVirtual(cmd) {
     await chrome.windows.update(tab.windowId, { focused: true });
   } catch (_) {}
   await new Promise((r) => setTimeout(r, waitMs));
+
+  const drift = await guardTarget(tabId, cmd.expectUrl);
+  if (drift) return drift;
 
   const target = { tabId };
   await chrome.debugger.attach(target, "1.3");
@@ -1076,3 +1101,4 @@ chrome.alarms?.onAlarm.addListener((alarm) => {
 });
 
 start();
+

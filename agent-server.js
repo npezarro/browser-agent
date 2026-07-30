@@ -528,15 +528,18 @@ function createApp(opts = {}) {
         if (shouldRouteToExtension(command.action, callerExtHeartbeat, EXT_TTL)) {
           extCmd = { ...command };
           // Attach the caller's target-tab context so the extension acts on THAT
-          // tab, not whatever is merely active. Without this, native/CDP commands
-          // (screenshot, click, close, focus) silently fall back to the active tab
-          // whenever they are given only the relay's internal tab id. The extension
-          // prefers `tabId` (its internal->chrome map) and falls back to `url`.
+          // tab, not whatever is merely active. The extension prefers `tabId`
+          // (its internal->chrome map) and falls back to `url`.
           if (tid) {
             extCmd.tabId = tid;
-            if (!extCmd.url && agentTabs[tid] && agentTabs[tid].url) {
-              extCmd.url = agentTabs[tid].url;
-            }
+            const known = agentTabs[tid] && agentTabs[tid].url;
+            if (!extCmd.url && known) extCmd.url = agentTabs[tid].url;
+            // `expectUrl` is the URL we last recorded for this exact tab. The
+            // extension cross-checks it by origin before attaching the debugger,
+            // because a relay tab id lives in the page's sessionStorage and so
+            // survives navigation: an id captured on site A still resolves after
+            // that tab has moved to site B (e.g. a logged-in account page).
+            if (known) extCmd.expectUrl = agentTabs[tid].url;
           }
         } else if (extAlive) {
           extCmd = translateToExtension(command, tid ? agentTabs[tid] : null, TAB_STALE_MS);

@@ -78,6 +78,34 @@ TIMEOUT=30
 
 auth_header="Authorization: Bearer $KEY"
 
+# A relay tab id, as minted by the content script and printed by `tabs`/`ensure`:
+# <epoch_ms>-<4 random base36 chars>.
+is_tab_id() {
+  [[ "$1" =~ ^[0-9]{10,}-[A-Za-z0-9]{2,8}$ ]]
+}
+
+# The cdp-*/capture/extract commands take one optional target argument that may
+# be either a relay tab id or a URL substring. Classify it into CDP_TAB / CDP_URL.
+#
+# This used to be read as a URL substring unconditionally, so passing a tab id
+# sent `url:"<tab id>"`, which matched no tab. The extension then silently fell
+# back to the focused tab, and the command ran against a page the caller never
+# named — a cdp-eval aimed at one site could read whatever was focused,
+# including a logged-in credential page. The extension now refuses that
+# fallback; this makes the tab id actually reach it.
+split_target() {
+  CDP_TAB=""
+  CDP_URL=""
+  local t="${1:-}"
+  if [ -z "$t" ]; then
+    CDP_TAB="$DEFAULT_TAB"
+  elif is_tab_id "$t"; then
+    CDP_TAB="$t"
+  else
+    CDP_URL="$t"
+  fi
+}
+
 # Synchronous command: POST to /agent/interactive, block for result
 interactive() {
   local tab_id="${1:-}"
@@ -246,10 +274,14 @@ case "$cmd" in
       local_action="captureTab"
     fi
 
+    # The target argument may be a relay tab id or a URL substring; only the
+    # latter belongs in the command's `url` field.
+    split_target "$local_focus_url"
+
     # Build command JSON
     local_capture_args=$(jq -nc \
       --arg action "$local_action" \
-      --arg url "$local_focus_url" \
+      --arg url "$CDP_URL" \
       --arg fmt "$local_format" \
       --arg sel "$local_selector" \
       --argjson full "$local_full" \
@@ -261,7 +293,7 @@ case "$cmd" in
        + (if $fmt != "" then {format:$fmt} else {} end)
        + (if $q != "" then {quality:($q|tonumber)} else {} end)')
 
-    result=$(interactive "" "$local_capture_args" 90)
+    result=$(interactive "$CDP_TAB" "$local_capture_args" 90)
     dataUrl=$(echo "$result" | jq -r '.result.dataUrl // .dataUrl // empty')
     if [ -z "$dataUrl" ]; then
       echo "ERROR: No screenshot data returned" >&2
@@ -429,16 +461,16 @@ EOF
   cdp-type|ct)
     # Type via Chrome DevTools Protocol (trusted events — works on React/FB)
     # Usage: cdp-type <selector> <text> [tabUrl]
-    local_url="${3:-}"
-    interactive "" "$(jq -nc --arg s "${1:?selector required}" --arg t "${2:?text required}" --arg u "$local_url" \
+    split_target "${3:-}"
+    interactive "$CDP_TAB" "$(jq -nc --arg s "${1:?selector required}" --arg t "${2:?text required}" --arg u "$CDP_URL" \
       'if $u != "" then {action:"cdpType", selector:$s, text:$t, url:$u} else {action:"cdpType", selector:$s, text:$t} end')"
     ;;
 
   cdp-click|cc)
     # Click via Chrome DevTools Protocol (trusted events)
     # Usage: cdp-click <selector> [tabUrl]
-    local_url2="${2:-}"
-    interactive "" "$(jq -nc --arg s "${1:?selector required}" --arg u "$local_url2" \
+    split_target "${2:-}"
+    interactive "$CDP_TAB" "$(jq -nc --arg s "${1:?selector required}" --arg u "$CDP_URL" \
       'if $u != "" then {action:"cdpClick", selector:$s, url:$u} else {action:"cdpClick", selector:$s} end')"
     ;;
 
@@ -455,7 +487,8 @@ EOF
         *) local_url3="$arg" ;;
       esac
     done
-    interactive "" "$(jq -nc --arg e "$eval_expr" --arg u "$local_url3" \
+    split_target "$local_url3"
+    interactive "$CDP_TAB" "$(jq -nc --arg e "$eval_expr" --arg u "$CDP_URL" \
       --argjson a "$await_promise" --argjson f "$focus_tab" --argjson s "$scroll_page" \
       '{action:"cdpEval", expression:$e, awaitPromise:$a, focus:$f, scroll:$s} + if $u != "" then {url:$u} else {} end')"
     ;;
@@ -464,8 +497,8 @@ EOF
     # Send special keystrokes via CDP (ArrowDown, Enter, Tab, Escape, etc.)
     # Usage: cdp-keys <keys-json> [tabUrl]
     # Example: cdp-keys '[{"key":"ArrowDown","code":"ArrowDown","keyCode":40},{"key":"Enter","code":"Enter","keyCode":13}]' facebook.com
-    local_url4="${2:-}"
-    interactive "" "$(jq -nc --argjson k "${1:?keys json required}" --arg u "$local_url4" \
+    split_target "${2:-}"
+    interactive "$CDP_TAB" "$(jq -nc --argjson k "${1:?keys json required}" --arg u "$CDP_URL" \
       'if $u != "" then {action:"cdpKeys", keys:$k, url:$u} else {action:"cdpKeys", keys:$k} end')"
     ;;
 
@@ -485,7 +518,8 @@ EOF
           else local_nc_url="$arg"; fi ;;
       esac
     done
-    TIMEOUT=$((nc_timeout / 1000 + 15)) interactive "" "$(jq -nc --arg p "$local_pattern" --arg u "$local_nc_url" \
+    split_target "$local_nc_url"
+    TIMEOUT=$((nc_timeout / 1000 + 15)) interactive "$CDP_TAB" "$(jq -nc --arg p "$local_pattern" --arg u "$CDP_URL" \
       --argjson t "$nc_timeout" --argjson m "$nc_maxlen" --argjson l "$nc_list" \
       '{action:"cdpNetworkCapture", urlPattern:$p, timeout:$t, maxLen:$m, listUrls:$l} + if $u != "" then {url:$u} else {} end')"
     ;;
@@ -504,7 +538,8 @@ EOF
           else local_ev_url="$arg"; fi ;;
       esac
     done
-    TIMEOUT=70 interactive "" "$(jq -nc --arg u "$local_ev_url" --arg s "$ev_selector" --arg e "$ev_extract" \
+    split_target "$local_ev_url"
+    TIMEOUT=70 interactive "$CDP_TAB" "$(jq -nc --arg u "$CDP_URL" --arg s "$ev_selector" --arg e "$ev_extract" \
       '{action:"extractVirtual"} + if $u != "" then {url:$u} else {} end + if $s != "" then {selector:$s} else {} end + if $e != "" then {extract:$e} else {} end')"
     ;;
 

@@ -44,6 +44,29 @@ export default [
     },
   },
 
+  // The service worker runs in MV3 worker scope and pulls tab-target.js in via
+  // importScripts, so those declarations land on its global scope.
+  {
+    files: ["extension/background.js"],
+    languageOptions: {
+      globals: {
+        importScripts: "readonly",
+        resolveTargetCore: "readonly",
+        originMismatch: "readonly",
+        originOf: "readonly",
+      },
+    },
+  },
+
+  // tab-target.js is dual-target: importScripts'd by the service worker and
+  // require'd by `node --test`, so it guards a CommonJS export.
+  {
+    files: ["extension/tab-target.js"],
+    languageOptions: {
+      globals: { module: "readonly" },
+    },
+  },
+
   // Test files
   {
     files: ["test/**/*.js"],

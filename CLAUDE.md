@@ -146,10 +146,27 @@ A Manifest V3 Chrome extension (`extension/`) that provides the complete browser
 
 The extension uses `chrome.debugger` (Chrome DevTools Protocol) to send **trusted** keyboard and mouse events that bypass `isTrusted` checks on sites like Facebook.
 
-- **`browser-cli cdp-type <selector> <text> [tabUrl]`** — Type text via CDP `Input.dispatchKeyEvent` (keyDown/char/keyUp per character). Focuses selector first, clears existing content (Ctrl+A, Backspace), then types character-by-character with 30ms delay. Uses `dispatchKeyEvent` instead of `insertText` because React controlled inputs respond to keyboard events but ignore `insertText`.
-- **`browser-cli cdp-click <selector> [tabUrl]`** — Click via CDP `Input.dispatchMouseEvent` at element center coordinates. Sends `mouseMoved` before press/release (required for React event delegation).
-- **`browser-cli cdp-eval <expression> [tabUrl]`** — Evaluate JS via CDP `Runtime.evaluate`. Bypasses CSP, enabling DOM inspection on Facebook, Google Photos, and other restrictive sites.
-- **`browser-cli cdp-keys <keys-json> [tabUrl]`** — Send special keystrokes (ArrowDown, Enter, Tab, Escape) via CDP `Input.dispatchKeyEvent`.
+- **`browser-cli cdp-type <selector> <text> [target]`** — Type text via CDP `Input.dispatchKeyEvent` (keyDown/char/keyUp per character). Focuses selector first, clears existing content (Ctrl+A, Backspace), then types character-by-character with 30ms delay. Uses `dispatchKeyEvent` instead of `insertText` because React controlled inputs respond to keyboard events but ignore `insertText`.
+- **`browser-cli cdp-click <selector> [target]`** — Click via CDP `Input.dispatchMouseEvent` at element center coordinates. Sends `mouseMoved` before press/release (required for React event delegation).
+- **`browser-cli cdp-eval <expression> [target]`** — Evaluate JS via CDP `Runtime.evaluate`. Bypasses CSP, enabling DOM inspection on Facebook, Google Photos, and other restrictive sites.
+- **`browser-cli cdp-keys <keys-json> [target]`** — Send special keystrokes (ArrowDown, Enter, Tab, Escape) via CDP `Input.dispatchKeyEvent`.
+
+`[target]` is either a **relay tab id** (from `tabs` / `ensure`, shaped `<epoch_ms>-<rand>`) or a **URL substring**. `split_target` in `browser-cli.sh` classifies it; omitting it uses `$BROWSER_AGENT_TAB`, and omitting that too uses the active tab. Same argument for `screenshot`, `network-capture`, and `extract-virtual`.
+
+## Tab Targeting Is Fail-Closed (v2.9.0 ext)
+
+**Every `cdp-*` / native command refuses to run when a named target can't be resolved.** It never silently retargets the focused tab. `extension/tab-target.js:resolveTargetCore` is the single decision point (pure, unit-tested in `test/tab-targeting.test.js`); `background.js` pulls it in via `importScripts`.
+
+Resolution order: `chromeTabId` -> relay `tabId` via the `internalToChrome` registry -> `url` substring match -> **error**. The active tab is used *only* when the caller named no target at all. Results echo `targetUrl` and `resolvedBy` (`registry` / `url` / `chromeTabId` / `activeTab`) so a wrong-tab hit is visible rather than silent.
+
+The relay also attaches `expectUrl` (the URL it last recorded for that tab id). The extension cross-checks it **by origin** at resolution *and* again immediately before `chrome.debugger.attach`, because a relay tab id lives in the page's `sessionStorage` and therefore **survives navigation** — an id captured on site A still resolves after that tab has moved to site B.
+
+**Why this matters (2026-07-30):** a `cdp-eval` given an explicit tab id returned the contents of a focused `myaccount.google.com` tab instead. Three bugs compounded:
+1. `browser-cli.sh` passed `interactive ""` for every CDP command, so **no `tabId` ever reached the relay** — the v2.8.0 server-side fix was dead code on this path.
+2. The CDP commands' optional positional was read as a URL substring unconditionally, so a tab id became `url:"<tab id>"` and matched nothing.
+3. `resolveTabId` then fell through to `chrome.tabs.query({active:true})` **silently**, and `cdpEval` echoed no target, so the caller had no signal.
+
+Net effect: any `cdp-eval`/`cdp-click` could read or click a credential page the caller never named. Treat a change to `resolveTargetCore` as a security change, and keep `test/tab-targeting.test.js` green.
 
 **Why:** Facebook (and other sites) check `event.isTrusted` on input events. Content script synthetic events are marked `isTrusted: false` and get silently ignored. CDP events go through the browser's input pipeline and are treated as real user input.
 
