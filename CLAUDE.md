@@ -300,3 +300,32 @@ Rule: do NOT conclude the browser is unreachable from content-script timeouts. R
 Gotcha: cdp-eval returns its result in a 'value' field alongside targetUrl/resolvedBy. Piping to 'tail -3' cuts the value off and makes a successful call look empty; grep for '"value"' instead.
 
 Related: browser-agent progress.md 2026-07-30 entries; memory rollup_browser_agent_gotchas.
+
+## A timeout during a Material overlay is not a failed click — screenshot before concluding
+Distinct from the throttling case above: on **Google Cloud Console** the content script
+answers `ping` normally, but the moment a Material overlay opens (the `cfc-select`
+Application-type dropdown on the Create-OAuth-client form), `click`/`text`/`queryall` start
+returning `Timeout waiting for browser response` — **while the click itself has already
+landed**. A screenshot taken right after shows the dropdown open and the option selectable.
+
+This false timeout had real cost: two prior sessions (2026-07-01, 2026-07-11) read it as
+"the Cloud Console create-client form is not automatable", recorded that in three guidance
+files, and left a production Android sign-in outage unfixed for 19 days. The form is fully
+automatable (verified 2026-07-30 by creating two Android OAuth clients end to end).
+
+Rules:
+- **Never infer "unautomatable" from a command timeout.** Take a `screenshot` and look.
+  Exit codes describe the transport, not the page.
+- `click` matches CSS **class** selectors but NOT custom element tag names
+  (`material-select-item`, `developer-item` -> "Element not found"; `.business-name` works).
+- A bare text match can hit a heading instead of the button: `click "Create"` matched the
+  "Create client" page title. Target a distinguishing class (`.mdc-button--unelevated`)
+  and confirm it is unique with `queryall` first.
+- Google Play Console **is** readable via plain `text` — the older "cert is in an
+  unreadable iframe" note was wrong.
+- When you must transcribe an exact string (cert fingerprint, key, id), use
+  `screenshot --selector <input>` for a native-resolution crop, or read it from DOM text.
+  On a downscaled full-page screenshot, hex glyphs are genuinely ambiguous (`48` vs `A8`)
+  and `see` will confidently misread them — it did, on a SHA-1, in this same session.
+- Prefer reading identifiers from `href` attributes (`queryall "table a"`) over OCR when
+  the page links to the resource.
