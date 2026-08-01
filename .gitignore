@@ -4,3 +4,7 @@ node_modules/
 *.pem
 *.key
 .DS_Store
+
+# Per-session git worktrees (guidance/concurrent-sessions.md). Without this the
+# worktree dir shows as untracked and `git add -A` in the canonical tree commits it.
+.claude/worktrees/
