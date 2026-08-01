@@ -1,6 +1,53 @@
 # context.md — browser-agent
 
-Last Updated: 2026-07-30 — fail-closed tab targeting for CDP commands (security)
+Last Updated: 2026-08-01 — fail-closed tab targeting + remote extension reload (ext 2.10.2)
+
+## 2026-07-30/08-01 — Remote extension reload + two more wrong-tab bugs (ext 2.9.0 -> 2.10.2)
+- **Why:** every extension deploy ended with "ask the user to open chrome://extensions",
+  and the fail-closed pass above had missed a code path.
+- **`ext-reload` (2.10.0):** a `reloadExtension` action calls `chrome.runtime.reload()`
+  (no permissions, callable from an MV3 service worker; for an *unpacked* extension the
+  reload is treated as an update and re-reads every file from disk). Deferred one tick so
+  `executeCommand` POSTs the result before the worker is torn down. The extension reports
+  its running version on each heartbeat; `/ext/status` returns `version` /
+  `expectedVersion` (read from the checkout's manifest) / `stale`.
+  - `stale` is **tri-state on purpose**: `null` = the running extension is too old to
+    report a version, which is NOT the same as up to date. Reporting `false` there would
+    hide exactly the drift the field exists to catch. `ext-reload` treats anything but an
+    explicit `false` as failure.
+  - **Limits:** cannot bootstrap itself (must exist in the RUNNING version, so one manual
+    reload is needed once), and cannot revive a dead service worker.
+  - **Rejected:** self-hosted CRX auto-update. Chrome no longer installs non-Web-Store
+    extensions from a plain registry `update_url`; it now needs an enterprise
+    `ExtensionSettings` force_installed policy, which also changes the extension ID and
+    adds a signing key + update manifest to maintain.
+- **`captureTab` (2.10.1):** the plain `screenshot` path kept its own ad-hoc resolution and
+  was missed by the first fail-closed pass. Two defects: an unresolvable target fell
+  through to the active tab, and when `chromeTabId` was supplied `windowId` stayed
+  undefined so the focus block was skipped and `captureVisibleTab(undefined)` captured the
+  FOCUSED tab **while the result still reported the requested tab id**. It also ignored the
+  internal->chrome registry. Now routed through `resolveTarget`.
+- **CDP screenshot fallback (2.10.2):** `captureVisibleTab` needs a composited window; it
+  throws "image readback failed" or hangs otherwise, which made plain `screenshot` unusable
+  here. `captureViaCdp(cmd, tgt)` was extracted taking an **already-resolved** target, and
+  `cmdCaptureTab` races an 8s timeout (a try/catch cannot catch the hang) then falls back.
+  - **Key design point:** the fallback reuses the SAME resolved target and never
+    re-resolves. A re-resolve could land on a different tab than the primary attempt and
+    would reintroduce the wrong-tab class this file spent 2.9.0-2.10.1 removing.
+  - Results carry `method: "captureVisibleTab" | "cdp-fallback"` + `primaryError`; the
+    switch is surfaced, not hidden.
+- **Verified live:** `ext-reload` exercised 3x. Guard path (Windows checkout not pulled)
+  came back stale and exited 1; happy path went 2.10.1 -> 2.10.2 exit 0 with no
+  chrome://extensions visit. Plain `browser-cli screenshot out.png <tabid>` wrote a valid
+  1280x569 PNG whose **content was the named tab** (confirmed by viewing the image, not the
+  byte count) while a decoy was focused.
+- **Concurrent-session note:** another session held the same working tree. My
+  `captureViaCdp` change landed inside its commit `1c66cff`, and its `see` fix landed
+  inside my `793bfad`. Content verified intact both ways; history not rewritten. Search by
+  content, not commit message, for this date range.
+- **State:** working. Extension 2.10.2 running (`stale:false`), relay 200, 207 tests pass.
+
+Full closeout: privateContext/deliverables/closeouts/2026-08-01-browser-agent-fail-closed-tab-targeting.md
 
 ## 2026-07-30 — Security: cdp-eval/cdp-click silently ran against the focused tab
 - **Symptom:** `cdp-eval` given an explicit relay tab id returned the content of a

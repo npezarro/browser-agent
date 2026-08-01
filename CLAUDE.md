@@ -290,7 +290,7 @@ When the Chrome window is minimized, occluded, or the display is off, browser-ag
 Symptoms seen together (2026-07-30):
 - 'tabs' still lists the tab with fresh-looking heartbeats (they batch through), so the tab looks healthy.
 - ping, state, text, eval, click ALL return 'Timeout waiting for browser response', on every retry.
-- screenshot fails with 'ERROR: Failed to capture tab: image readback failed' (captureVisibleTab needs a composited surface).
+- screenshot USED to fail with 'ERROR: Failed to capture tab: image readback failed' (captureVisibleTab needs a composited surface). **Fixed in ext v2.10.2** — `cmdCaptureTab` now races an 8s timeout and falls back to CDP `Page.captureScreenshot`, so screenshots keep working on a non-composited window. The result reports `method: "cdp-fallback"` and `primaryError`, so this symptom is now a visible field rather than a failure. If you see the raw error again, the extension is older than 2.10.2 — check `ext-status`.
 - ensure, focus, ext-status keep working (service-worker side).
 
 Cause: Chrome throttles timers in backgrounded tabs, stalling the content script's poll loop. The service worker is unaffected.
