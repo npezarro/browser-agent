@@ -232,6 +232,16 @@ case "$cmd" in
     # Reload the extension remotely, so a deployed change takes effect without
     # anyone opening chrome://extensions. Pull the Windows checkout FIRST (Chrome
     # loads from there, not WSL) or this just reloads the same code.
+    #
+    # The browser is a SINGLETON: there is one extension, and two sessions reloading
+    # it at once means each can tear down the other's service worker mid-verify and
+    # then read the other's version back. Serialize on the shared resource lock when
+    # it is available (agentGuidance may be absent on the VM, so this is optional).
+    LOCK="$HOME/repos/agentGuidance/scripts/with-resource-lock.sh"
+    if [ -x "$LOCK" ] && [ -z "${BROWSER_AGENT_NO_LOCK:-}" ]; then
+      exec "$LOCK" browser-extension --timeout 180 -- \
+        env BROWSER_AGENT_NO_LOCK=1 "$0" ext-reload "$@"
+    fi
     interactive "" '{"action":"reloadExtension"}' 15 || true
     echo "Waiting for the extension to come back..." >&2
     for _ in $(seq 15); do
