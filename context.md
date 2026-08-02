@@ -258,5 +258,30 @@ Full session closeout: privateContext/deliverables/closeouts/2026-05-29-browser-
 
 Full session closeout: privateContext/deliverables/closeouts/2026-07-30-brevo-mcp-setup-and-see-bug-fix.md
 
+## 2026-08-01 — form-fill: atomic SPA form fill+submit
+- **Added:** `browser-cli form-fill` (alias `ff`) in `browser-cli.sh` + `CLAUDE.md`, commit `88e4ac1`.
+  Fills `{selector: value}` via the native `HTMLInputElement` value setter plus `input`/`change`,
+  then clicks a `--submit` regex-matched visible button, all inside ONE `cdp-eval`. Returns
+  `{filled, missing, submitted, url, body}`. Pure CLI change: no extension edit, no reload needed.
+- **Why:** on Vue `v-model` / React controlled forms, filling in one CLI call and submitting in
+  the next ALWAYS submits blank. The framework re-renders between calls and writes its empty
+  model back over the DOM. The page returns "This field is required" on fields you just filled,
+  which reads exactly like bot detection and is not.
+- **Two traps documented in CLAUDE.md:** (1) `cdp-type` silently no-ops on tabs opened by
+  `ensure` (`openTabBackground` -> `visibilityState:"hidden"` -> nothing holds focus) while still
+  returning `typed:true` — always DOM-readback; focusing may not help if the Windows desktop is
+  not rendering. (2) The visible submit button may not be the form's submit element: staples.com
+  ships a hidden `input[type=submit]#loginButton_0` beside the real `button.btn-primary`, and
+  clicking the hidden one fires validation only. Match visible text AND require `offsetParent`.
+- **Boundary recorded:** this automates a real browser on the user's own session. It does not
+  forge site anti-fraud telemetry (staples.com ships NuData `nds-pmd` behavioural biometrics)
+  and must not be extended to. On CAPTCHA/step-up, stop and hand back to the user.
+- **First consumer:** `privateContext/recurring-tasks/scripts/staples-giftcard-buy.py`.
+- **Verified:** live DOM readback (17 chars into `#searchInput`, exact value confirmed) plus
+  `missing` correctly reporting a bogus selector.
+- **State:** working. On `origin/master`.
+
+Full session closeout: privateContext/deliverables/closeouts/2026-08-01-staples-monthly-giftcard-automation.md
+
 ## Active Branch
 `master`

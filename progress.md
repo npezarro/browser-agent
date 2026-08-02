@@ -196,3 +196,7 @@ Full session closeout: privateContext/deliverables/closeouts/2026-07-30-brevo-mc
 
 ## 2026-05-28 — v2.6.0 Per-Key Routing
 - 895ec78 — Route extension commands per API key so each browser only sees its own queue
+
+## 2026-08-01 — form-fill (atomic SPA form fill+submit)
+- 88e4ac1 — feat(cli): add form-fill for atomic SPA form fill+submit; documents the
+  background-tab cdp-type no-op and the hidden-decoy submit button. CLI-only, no reload.
