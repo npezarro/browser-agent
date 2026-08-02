@@ -53,6 +53,9 @@ export default [
         importScripts: "readonly",
         resolveTargetCore: "readonly",
         originMismatch: "readonly",
+        // Also from tab-target.js via importScripts (origin containment, 2.11.0).
+        isSensitiveOrigin: "readonly",
+        allowlistViolation: "readonly",
         originOf: "readonly",
       },
     },
