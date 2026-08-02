@@ -197,6 +197,18 @@ Full session closeout: privateContext/deliverables/closeouts/2026-07-30-brevo-mc
 ## 2026-05-28 — v2.6.0 Per-Key Routing
 - 895ec78 — Route extension commands per API key so each browser only sees its own queue
 
+## 2026-08-02 — Worktree gitignore + a test artifact reverted off master (`b06111f`)
+- `.claude/worktrees/` gitignore prerequisite (this repo is the worktree trial). Without it
+  the canonical checkout lists `?? .claude/` and a stage-everything command there commits an
+  entire nested worktree.
+- **Self-inflicted, disclosed:** while verifying the push gate goes quiet once worktree work
+  is merged, a real `git merge` + `git push` put a test file (`wt-test.md`) on `origin/master`.
+  Removed by a forward revert (`b06111f`) rather than a history rewrite, since the commits
+  were already pushed and other sessions are live in this repo. The agentGuidance suite now
+  runs that scenario in a `mktemp -d` throwaway repo.
+- Deploys read the CANONICAL checkout, so merge and push before `deploy.sh` or `ext-reload`
+  from a worktree. Context: `agentGuidance/guidance/concurrent-sessions.md`.
+
 ## 2026-08-01 — form-fill (atomic SPA form fill+submit)
 - 88e4ac1 — feat(cli): add form-fill for atomic SPA form fill+submit; documents the
   background-tab cdp-type no-op and the hidden-decoy submit button. CLI-only, no reload.
