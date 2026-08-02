@@ -1,6 +1,25 @@
 # context.md — browser-agent
 
-Last Updated: 2026-08-01 — fail-closed tab targeting + remote extension reload (ext 2.10.2)
+Last Updated: 2026-08-01 — fail-closed tab targeting, remote reload, ext-reload now lock-serialized
+
+## 2026-08-01 — ext-reload serializes on a cross-session resource lock
+- **Why:** the browser is a SINGLETON. Two sessions reloading at once tear down each
+  other's service worker mid-verify and then read the other's version back — which is
+  exactly the drift `ext-status` exists to detect, so the failure disguises itself as
+  the detector working.
+- `browser-cli ext-reload` now re-execs itself under
+  `agentGuidance/scripts/with-resource-lock.sh browser-extension --timeout 180`. The wrap
+  is optional (skipped when agentGuidance is absent, as on the VM) and
+  `BROWSER_AGENT_NO_LOCK=1` opts out — that variable is also how the re-exec avoids
+  recursing into itself.
+- `.gitignore` gained `.claude/worktrees/`: this repo is the trial for per-session git
+  worktrees. Unignored, a worktree shows as `?? .claude/` in the canonical checkout and a
+  stage-everything command there commits an entire nested worktree.
+- Rationale and the rest of the design: `agentGuidance/guidance/concurrent-sessions.md`.
+- **State:** working. Verified the lock is held during a live `ext-reload` and the reload
+  still completes (2.10.1 -> 2.10.2, exit 0).
+
+Full closeout: privateContext/deliverables/closeouts/2026-08-01-concurrent-sessions-worktrees-and-locks.md
 
 ## 2026-07-30/08-01 — Remote extension reload + two more wrong-tab bugs (ext 2.9.0 -> 2.10.2)
 - **Why:** every extension deploy ended with "ask the user to open chrome://extensions",
