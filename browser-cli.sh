@@ -259,7 +259,7 @@ case "$cmd" in
     curl -s "$API/ext/status" -H "$auth_header" | jq .
     ;;
 
-  health)
+  ext-health)
     # Four-state liveness probe. `ext-status` alone is NOT sufficient: it proves
     # only that the background service worker is POLLING, and there are two
     # real states where it reports connected:true with a fresh heartbeat while
@@ -622,16 +622,16 @@ EOF
     # Type via Chrome DevTools Protocol (trusted events — works on React/FB)
     # Usage: cdp-type <selector> <text> [tabUrl]
     split_target "${3:-}"
-    interactive "$CDP_TAB" "$(jq -nc --arg s "${1:?selector required}" --arg t "${2:?text required}" --arg u "$CDP_URL" \
-      'if $u != "" then {action:"cdpType", selector:$s, text:$t, url:$u} else {action:"cdpType", selector:$s, text:$t} end')"
+    interactive "$CDP_TAB" "$(jq -nc --arg s "${1:?selector required}" --arg t "${2:?text required}" --arg u "$CDP_URL" --argjson tf "$(target_json)" \
+      '$tf + if $u != "" then {action:"cdpType", selector:$s, text:$t, url:$u} else {action:"cdpType", selector:$s, text:$t} end')"
     ;;
 
   cdp-click|cc)
     # Click via Chrome DevTools Protocol (trusted events)
     # Usage: cdp-click <selector> [tabUrl]
     split_target "${2:-}"
-    interactive "$CDP_TAB" "$(jq -nc --arg s "${1:?selector required}" --arg u "$CDP_URL" \
-      'if $u != "" then {action:"cdpClick", selector:$s, url:$u} else {action:"cdpClick", selector:$s} end')"
+    interactive "$CDP_TAB" "$(jq -nc --arg s "${1:?selector required}" --arg u "$CDP_URL" --argjson tf "$(target_json)" \
+      '$tf + if $u != "" then {action:"cdpClick", selector:$s, url:$u} else {action:"cdpClick", selector:$s} end')"
     ;;
 
   cdp-eval|ce)
@@ -720,8 +720,8 @@ print("".join(parts))
     # Usage: cdp-keys <keys-json> [tabUrl]
     # Example: cdp-keys '[{"key":"ArrowDown","code":"ArrowDown","keyCode":40},{"key":"Enter","code":"Enter","keyCode":13}]' facebook.com
     split_target "${2:-}"
-    interactive "$CDP_TAB" "$(jq -nc --argjson k "${1:?keys json required}" --arg u "$CDP_URL" \
-      'if $u != "" then {action:"cdpKeys", keys:$k, url:$u} else {action:"cdpKeys", keys:$k} end')"
+    interactive "$CDP_TAB" "$(jq -nc --argjson k "${1:?keys json required}" --arg u "$CDP_URL" --argjson tf "$(target_json)" \
+      '$tf + if $u != "" then {action:"cdpKeys", keys:$k, url:$u} else {action:"cdpKeys", keys:$k} end')"
     ;;
 
   network-capture|nc)
@@ -741,9 +741,9 @@ print("".join(parts))
       esac
     done
     split_target "$local_nc_url"
-    TIMEOUT=$((nc_timeout / 1000 + 15)) interactive "$CDP_TAB" "$(jq -nc --arg p "$local_pattern" --arg u "$CDP_URL" \
+    TIMEOUT=$((nc_timeout / 1000 + 15)) interactive "$CDP_TAB" "$(jq -nc --arg p "$local_pattern" --arg u "$CDP_URL" --argjson tf "$(target_json)" \
       --argjson t "$nc_timeout" --argjson m "$nc_maxlen" --argjson l "$nc_list" \
-      '{action:"cdpNetworkCapture", urlPattern:$p, timeout:$t, maxLen:$m, listUrls:$l} + if $u != "" then {url:$u} else {} end')"
+      '{action:"cdpNetworkCapture", urlPattern:$p, timeout:$t, maxLen:$m, listUrls:$l} + $tf + if $u != "" then {url:$u} else {} end')"
     ;;
 
   extract-virtual|ev)
@@ -761,8 +761,8 @@ print("".join(parts))
       esac
     done
     split_target "$local_ev_url"
-    TIMEOUT=70 interactive "$CDP_TAB" "$(jq -nc --arg u "$CDP_URL" --arg s "$ev_selector" --arg e "$ev_extract" \
-      '{action:"extractVirtual"} + if $u != "" then {url:$u} else {} end + if $s != "" then {selector:$s} else {} end + if $e != "" then {extract:$e} else {} end')"
+    TIMEOUT=70 interactive "$CDP_TAB" "$(jq -nc --arg u "$CDP_URL" --arg s "$ev_selector" --arg e "$ev_extract" --argjson tf "$(target_json)" \
+      '{action:"extractVirtual"} + $tf + if $u != "" then {url:$u} else {} end + if $s != "" then {selector:$s} else {} end + if $e != "" then {extract:$e} else {} end')"
     ;;
 
   console)
