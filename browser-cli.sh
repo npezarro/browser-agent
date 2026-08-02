@@ -538,6 +538,66 @@ EOF
       '{action:"cdpEval", expression:$e, awaitPromise:$a, focus:$f, scroll:$s} + if $u != "" then {url:$u} else {} end')"
     ;;
 
+  form-fill|ff)
+    # Atomically fill framework-controlled inputs (Vue v-model / React controlled)
+    # and optionally click a submit button — all inside ONE CDP evaluation.
+    #
+    # Why this exists (learned on staples.com, 2026-08-01): setting a value in one
+    # CLI call and submitting in the NEXT call fails on SPA forms. The framework
+    # re-renders between calls and writes its own (empty) model back over the DOM
+    # value, so the form submits blank and shows "This field is required".
+    # `cdp-type` is no help either when the tab was opened in the background:
+    # visibilityState is "hidden", nothing can hold focus, and the synthesised
+    # keystrokes land nowhere (it still reports typed:true).
+    #
+    # Usage:
+    #   browser-cli form-fill '{"#user":"bob","#pw":"s3cret"}' <tabIdOrUrl> \
+    #     [--submit 'sign in'] [--settle MS] [--wait MS]
+    #
+    # --submit takes a case-insensitive regex matched against visible button text.
+    # Returns {filled:{selector:length}, missing:[...], submitted:bool, url, body}.
+    ff_fields="${1:?fields JSON object required}"; shift
+    ff_target=""; ff_submit=""; ff_settle="700"; ff_wait="8000"
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --submit) ff_submit="${2:?--submit requires a button text pattern}"; shift 2 ;;
+        --settle) ff_settle="${2:?--settle requires milliseconds}"; shift 2 ;;
+        --wait)   ff_wait="${2:?--wait requires milliseconds}"; shift 2 ;;
+        *) ff_target="$1"; shift ;;
+      esac
+    done
+    split_target "$ff_target"
+    ff_js="$(FF_FIELDS="$ff_fields" FF_SUBMIT="$ff_submit" FF_SETTLE="$ff_settle" FF_WAIT="$ff_wait" python3 -c '
+import json, os
+fields = json.loads(os.environ["FF_FIELDS"])
+submit, settle, wait = os.environ["FF_SUBMIT"], os.environ["FF_SETTLE"], os.environ["FF_WAIT"]
+setter = ("var set=function(el,v){var s=Object.getOwnPropertyDescriptor("
+          "window.HTMLInputElement.prototype,\"value\").set;s.call(el,v);"
+          "el.dispatchEvent(new Event(\"input\",{bubbles:true}));"
+          "el.dispatchEvent(new Event(\"change\",{bubbles:true}));};")
+parts = ["(async()=>{", setter, "var filled={},missing=[];"]
+for i, (sel, val) in enumerate(fields.items()):
+    s, v = json.dumps(sel), json.dumps(str(val))
+    parts.append("var e%d=document.querySelector(%s);"
+                 "if(e%d){set(e%d,%s);filled[%s]=e%d.value.length;}else{missing.push(%s);}"
+                 % (i, s, i, i, v, s, i, s))
+parts.append("await new Promise(r=>setTimeout(r,%s));" % settle)
+if submit:
+    parts.append("var b=[].slice.call(document.querySelectorAll(\"button,input[type=submit]\"))"
+                 ".filter(function(x){return new RegExp(%s,\"i\").test((x.innerText||x.value||\"\").trim())"
+                 "&&x.offsetParent})[0];if(b)b.click();" % json.dumps(submit))
+else:
+    parts.append("var b=null;")
+parts.append("await new Promise(r=>setTimeout(r,%s));" % wait)
+parts.append("return JSON.stringify({filled:filled,missing:missing,submitted:!!b,"
+             "url:location.href.slice(0,90),"
+             "body:(document.body.innerText||\"\").replace(/\\s+/g,\" \").slice(0,600)});})()")
+print("".join(parts))
+')"
+    interactive "$CDP_TAB" "$(jq -nc --arg e "$ff_js" --arg u "$CDP_URL" \
+      '{action:"cdpEval", expression:$e, awaitPromise:true} + if $u != "" then {url:$u} else {} end')"
+    ;;
+
   cdp-keys|ck)
     # Send special keystrokes via CDP (ArrowDown, Enter, Tab, Escape, etc.)
     # Usage: cdp-keys <keys-json> [tabUrl]

@@ -168,6 +168,7 @@ The extension uses `chrome.debugger` (Chrome DevTools Protocol) to send **truste
 - **`browser-cli cdp-click <selector> [target]`** — Click via CDP `Input.dispatchMouseEvent` at element center coordinates. Sends `mouseMoved` before press/release (required for React event delegation).
 - **`browser-cli cdp-eval <expression> [target]`** — Evaluate JS via CDP `Runtime.evaluate`. Bypasses CSP, enabling DOM inspection on Facebook, Google Photos, and other restrictive sites.
 - **`browser-cli cdp-keys <keys-json> [target]`** — Send special keystrokes (ArrowDown, Enter, Tab, Escape) via CDP `Input.dispatchKeyEvent`.
+- **`browser-cli form-fill <fields-json> [target] [--submit <regex>] [--settle MS] [--wait MS]`** (alias `ff`) — Fill framework-controlled inputs **and** submit inside a single CDP evaluation. Values go in through the native `HTMLInputElement.value` setter plus `input`/`change` events; `--submit` matches a case-insensitive regex against visible button text. Returns `{filled:{selector:length}, missing:[], submitted:bool, url, body}`. Use this for any Vue/React login or checkout form — see the atomicity rule below.
 
 `[target]` is either a **relay tab id** (from `tabs` / `ensure`, shaped `<epoch_ms>-<rand>`) or a **URL substring**. `split_target` in `browser-cli.sh` classifies it; omitting it uses `$BROWSER_AGENT_TAB`, and omitting that too uses the active tab. Same argument for `screenshot`, `network-capture`, and `extract-virtual`.
 
@@ -329,3 +330,45 @@ Rules:
   and `see` will confidently misread them — it did, on a SHA-1, in this same session.
 - Prefer reading identifiers from `href` attributes (`queryall "table a"`) over OCR when
   the page links to the resource.
+
+## SPA forms must be filled and submitted in ONE call (`form-fill`)
+
+Discovered driving staples.com checkout, 2026-08-01.
+
+On a framework-controlled form (Vue `v-model`, React controlled inputs), filling a
+field in one `browser-cli` call and clicking submit in the **next** call always
+fails. Between the two calls the framework re-renders and writes its own model
+back over the DOM, so the value you set is gone by the time submit fires. The
+symptom is misleading: the click *does* work, and the page comes back with
+"This field is required" on fields you just populated. It looks like bot
+detection. It is not.
+
+Two further traps on the same page:
+
+- **`cdp-type` silently no-ops on background tabs.** `ensure` opens tabs with
+  `openTabBackground`, so `visibilityState` is `"hidden"`, nothing can take focus,
+  and `Input.dispatchKeyEvent` has no target. It still returns
+  `{"typed":true,"length":23}`. Always confirm with a DOM readback, never trust
+  `typed:true`. Focusing the tab does not necessarily fix it: if the Windows
+  desktop is not rendering, the tab stays `hidden` even after `AppActivate`.
+- **The visible submit button may not be the form's submit element.** Staples
+  ships a hidden `input[type=submit]#loginButton_0` alongside the real
+  `button.btn-primary`. Clicking the hidden one fires validation and nothing else.
+  Match on visible text and require `offsetParent`.
+
+Do this instead:
+
+```bash
+browser-cli form-fill '{"input[name=callback_2]":"user@example.com","input[name=callback_4]":"pw"}' \
+  "$TAB" --submit '^sign in$'
+```
+
+Check `filled` (per-selector character counts) and `missing` in the response
+before believing it worked. A real consumer of this pattern lives at
+`privateContext/recurring-tasks/scripts/staples-giftcard-buy.py`.
+
+**Scope note:** this is ordinary automation of a real browser on the user's own
+logged-in session. It does not forge the site's anti-fraud telemetry (Staples
+ships NuData `nds-pmd` behavioural biometrics), and it should not be extended to.
+If a site escalates to a CAPTCHA or a step-up challenge, stop and hand back to the
+user rather than trying to defeat it.
