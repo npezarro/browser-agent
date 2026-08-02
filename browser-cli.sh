@@ -101,9 +101,12 @@ split_target() {
   local t="${1:-}"
   if [ -z "$t" ]; then
     CDP_TAB="$DEFAULT_TAB"
-  elif [[ "$t" =~ ^[0-9]{1,9}$ ]]; then
+  elif [[ "$t" =~ ^[0-9]+$ ]]; then
     # A bare integer is a CHROME tab id (what `open` and `tabs` return as
-    # chromeTabId). This is the strongest targeting primitive the extension
+    # chromeTabId). Unambiguous against a relay tab id, which is always
+    # `<epoch_ms>-<rand>` and therefore never all-digits. No digit cap: Chrome
+    # tab ids routinely exceed 9 digits (seen 1400363481), and a cap silently
+    # routed those to the URL-substring branch, where they matched nothing. This is the strongest targeting primitive the extension
     # accepts and, until 2.11.0, there was no way to send one -- so every
     # unattended command was forced onto the relay tab id, which lives in page
     # sessionStorage and therefore survives navigation. It is also the ONLY
@@ -292,7 +295,7 @@ case "$cmd" in
     if [ "$background" = "ok" ]; then
       # Does the worker actually EXECUTE, or does it merely poll? A fresh
       # heartbeat with a hung command loop is a real state ext-status cannot see.
-      tabs_out="$(interactive "" '"'"'{action:"queryTabs"}'"'"' 12 2>/dev/null)"
+      tabs_out="$(interactive "" '{"action":"queryTabs"}' 12 2>/dev/null)"
       echo "$tabs_out" | jq -e '.tabs' >/dev/null 2>&1 && worker="ok" || worker="timeout"
     fi
 
@@ -301,20 +304,20 @@ case "$cmd" in
       # existing tab -- including one belonging to the other browser profile,
       # which `ensure` would happily return (both keys see the union of tabs).
       open_out="$(interactive "" "$(jq -nc --arg u "$probe_url" \
-        '"'"'{action:"openTabBackground", url:$u}'"'"')" 20 2>/dev/null)"
+        '{action:"openTabBackground", url:$u}')" 20 2>/dev/null)"
       probe_tab="$(echo "$open_out" | jq -r '.chromeTabId // empty')"
 
       if [ -n "$probe_tab" ]; then
         sleep 2
         # Content script alive AND unthrottled?
         ping_out="$(interactive "" "$(jq -nc --argjson c "$probe_tab" \
-          '"'"'{action:"ping", chromeTabId:$c}'"'"')" 10 2>/dev/null)"
+          '{action:"ping", chromeTabId:$c}')" 10 2>/dev/null)"
         echo "$ping_out" | jq -e '.pong // .ok // .alive' >/dev/null 2>&1 \
           && content="ok" || content="throttled"
 
         # CDP path AND correct targeting.
         cdp_out="$(CDP_CHROME_TAB="$probe_tab" interactive "" "$(jq -nc --argjson c "$probe_tab" \
-          '"'"'{action:"cdpEval", expression:"location.origin", awaitPromise:false, chromeTabId:$c}'"'"')" 25 2>/dev/null)"
+          '{action:"cdpEval", expression:"location.origin", awaitPromise:false, chromeTabId:$c}')" 25 2>/dev/null)"
         resolved_by="$(echo "$cdp_out" | jq -r '.resolvedBy // "?"')"
         cdp_origin="$(echo "$cdp_out" | jq -r '.value // ""')"
         if [ "$cdp_origin" = "$probe_origin" ] && [ "$resolved_by" != "activeTab" ]; then
@@ -322,7 +325,7 @@ case "$cmd" in
         elif [ -n "$cdp_origin" ]; then
           cdp="mistarget"
         fi
-        interactive "" "$(jq -nc --argjson c "$probe_tab" '"'"'{action:"closeTab", chromeTabId:$c}'"'"')" 10 >/dev/null 2>&1
+        interactive "" "$(jq -nc --argjson c "$probe_tab" '{action:"closeTab", chromeTabId:$c}')" 10 >/dev/null 2>&1
       fi
     fi
 
