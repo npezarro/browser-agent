@@ -21,6 +21,55 @@ let heartbeatTimer = null;
 // on the wrong tab, especially when multiple tabs share a URL.
 const internalToChrome = new Map();
 
+// The Map above is module state in an MV3 SERVICE WORKER, which Chrome
+// terminates after ~30s idle. Every termination wiped the registry, and it is
+// only repopulated when a content script sends `ba-register-tab`.
+//
+// That produces a failure that looks exactly like a dead browser but is not:
+// the relay keeps LISTING a tab for its own 120s TTL, so `tabs` looks healthy,
+// while every relay-tabId target fails "Target tab not found". And when the
+// content script is throttled (minimised / occluded / display off -- i.e. every
+// overnight run) it never re-registers, so the registry stays empty
+// indefinitely. Reproduced live 2026-08-01.
+//
+// chrome.storage.session survives worker restarts, is memory-backed, and clears
+// on browser exit -- the correct lifetime for a tab-id map.
+const REGISTRY_KEY = "internalToChrome";
+let registryLoaded = false;
+
+async function loadRegistry() {
+  if (registryLoaded) return;
+  try {
+    const stored = await chrome.storage.session.get(REGISTRY_KEY);
+    for (const [k, v] of Object.entries(stored?.[REGISTRY_KEY] || {})) {
+      if (!internalToChrome.has(k)) internalToChrome.set(k, v);
+    }
+  } catch (_e) { /* storage.session unavailable: degrade to in-memory */ }
+  registryLoaded = true;
+}
+
+async function persistRegistry() {
+  try {
+    await chrome.storage.session.set({
+      [REGISTRY_KEY]: Object.fromEntries(internalToChrome),
+    });
+  } catch (_e) { /* best effort; the in-memory Map still works this session */ }
+}
+
+/**
+ * Containment options carried by a command, in one place so every call site
+ * forwards the same fields. A gate enforced only at resolution is not a gate:
+ * the tab can navigate before the debugger attaches.
+ */
+function opt(cmd) {
+  return { allowOrigins: cmd.allowOrigins, unsafeAllowSensitive: cmd.unsafeAllowSensitive };
+}
+
+// Tabs with an in-flight chrome.debugger attach. Chrome allows exactly one
+// debugger client per tab, so concurrent cdp-* commands must queue, not race
+// to "Another debugger is already attached".
+const attachLock = new Set();
+
 // --- Config ---
 
 async function loadConfig() {
@@ -60,6 +109,15 @@ async function sendHeartbeat() {
       type: "extension",
       tabCount: tabs.length,
       ts: Date.now(),
+      // The extension's own view of open tabs. The relay previously sourced
+      // `expectUrl` only from content-script traffic, which is pruned after
+      // 120s -- so on a throttled (minimised / display-off) browser the origin
+      // guard silently became a no-op exactly when it mattered most. Query
+      // strings are stripped: they carry tokens far more often than paths do.
+      tabs: tabs.slice(0, 200).map((t) => ({
+        chromeTabId: t.id,
+        url: t.url ? t.url.split("?")[0] : null,
+      })),
       // Chrome never auto-reloads an unpacked extension, so the relay needs to be
       // told which code is actually running to detect post-deploy drift.
       version: chrome.runtime.getManifest().version,
@@ -169,31 +227,25 @@ async function cmdOpenTab(cmd) {
   };
 }
 
+// close/focus previously bypassed resolveTarget entirely: close did
+// `chrome.tabs.query({url: cmd.url + "*"})` and took tabs[0], so a URL PREFIX
+// shared by two tabs closed whichever Chrome listed first, and an explicitly
+// passed relay `tabId` was ignored outright. A nightly job that ends by closing
+// its own tab could therefore close one of the operator's. Both now go through
+// the same fail-closed resolver as every other targeted command.
 async function cmdCloseTab(cmd) {
-  // Find tab by URL prefix or chromeTabId
-  let tabId = cmd.chromeTabId;
-  if (!tabId && cmd.url) {
-    const tabs = await chrome.tabs.query({ url: cmd.url + "*" });
-    if (tabs.length > 0) tabId = tabs[0].id;
-  }
-  if (!tabId) return { closed: false, error: "Tab not found" };
-
-  await chrome.tabs.remove(tabId);
-  return { closed: true, chromeTabId: tabId };
+  const t = await resolveTarget(cmd);
+  if (t.error) return { closed: false, ...t };
+  await chrome.tabs.remove(t.tabId);
+  return { closed: true, chromeTabId: t.tabId, targetUrl: t.targetUrl, resolvedBy: t.resolvedBy };
 }
 
 async function cmdFocusTab(cmd) {
-  let tabId = cmd.chromeTabId;
-  if (!tabId && cmd.url) {
-    const tabs = await chrome.tabs.query({});
-    const match = tabs.find((t) => t.url && t.url.includes(cmd.url));
-    if (match) tabId = match.id;
-  }
-  if (!tabId) return { focused: false, error: "Tab not found" };
-
-  const tab = await chrome.tabs.update(tabId, { active: true });
+  const t = await resolveTarget(cmd);
+  if (t.error) return { focused: false, ...t };
+  const tab = await chrome.tabs.update(t.tabId, { active: true });
   await chrome.windows.update(tab.windowId, { focused: true });
-  return { focused: true, chromeTabId: tabId };
+  return { focused: true, chromeTabId: t.tabId, targetUrl: t.targetUrl, resolvedBy: t.resolvedBy };
 }
 
 /**
@@ -396,7 +448,7 @@ async function captureViaCdp(cmd, tgt) {
       fullPage: !!cmd.fullPage,
       selector: cmd.selector || null,
     };
-  }, cmd.expectUrl);
+  }, cmd.expectUrl, opt(cmd));
 }
 
 // --- CDP Commands (trusted input via chrome.debugger) ---
@@ -406,6 +458,9 @@ async function captureViaCdp(cmd, tgt) {
  * Returns { tabId, resolvedBy, targetUrl } or { error, resolvedBy }.
  */
 async function resolveTarget(cmd) {
+  // The service worker may have been recycled since the last command, taking
+  // the in-memory registry with it. Rehydrate before resolving.
+  await loadRegistry();
   const tabs = await chrome.tabs.query({});
   const [active] = await chrome.tabs.query({
     active: true,
@@ -418,7 +473,10 @@ async function resolveTarget(cmd) {
   // next call re-registers instead of retrying a dead mapping.
   if (out.error && cmd.tabId && internalToChrome.has(cmd.tabId)) {
     const chromeId = internalToChrome.get(cmd.tabId);
-    if (!tabs.some((t) => t.id === chromeId)) internalToChrome.delete(cmd.tabId);
+    if (!tabs.some((t) => t.id === chromeId)) {
+      internalToChrome.delete(cmd.tabId);
+      persistRegistry();
+    }
   }
   return out;
 }
@@ -440,15 +498,27 @@ async function tabUrlOf(chromeTabId) {
  * withDebugger: a tab can navigate between resolution and attach, and the
  * debugger must never land on an origin the caller did not name.
  */
-async function guardTarget(tabId, expectUrl) {
-  if (!expectUrl) return null;
-  return originMismatch(expectUrl, await tabUrlOf(tabId));
+async function guardTarget(tabId, expectUrl, opts = {}) {
+  const url = await tabUrlOf(tabId);
+  if (expectUrl) {
+    const mismatch = originMismatch(expectUrl, url);
+    if (mismatch) return mismatch;
+  }
+  // Re-check containment here too: resolution and attach are separate moments
+  // and the tab can navigate in between.
+  if (isSensitiveOrigin(url) && opts.unsafeAllowSensitive !== true) {
+    return {
+      error: `Refusing to act on sensitive origin ${originOf(url)} (re-checked before attach).`,
+      deniedOrigin: originOf(url), sensitive: true,
+    };
+  }
+  return allowlistViolation(opts.allowOrigins, url);
 }
 
 // Attach debugger, run fn, detach. `expectUrl` is re-checked immediately before
 // attaching: a tab can navigate between resolution and attach, and the debugger
 // must never land on an origin the caller did not name.
-async function withDebugger(tabId, fn, expectUrl) {
+async function withDebugger(tabId, fn, expectUrl, opts = {}) {
   if (!tabId) return { error: "No debuggable tab found. Specify a target URL or ensure an HTTP/HTTPS tab is active." };
   // Validate tab URL is debuggable (chrome://, about:, edge:// cannot be debugged)
   try {
@@ -458,15 +528,36 @@ async function withDebugger(tabId, fn, expectUrl) {
     }
     const mismatch = originMismatch(expectUrl, tab.url);
     if (mismatch) return mismatch;
+    if (isSensitiveOrigin(tab.url) && opts.unsafeAllowSensitive !== true) {
+      return {
+        error: `Refusing to attach the debugger to sensitive origin ${originOf(tab.url)}.`,
+        deniedOrigin: originOf(tab.url), sensitive: true,
+      };
+    }
+    const denied = allowlistViolation(opts.allowOrigins, tab.url);
+    if (denied) return denied;
   } catch (e) {
     return { error: `Tab ${tabId} not found: ${e.message}` };
   }
+  // Serialise attaches. Concurrent cdp-* calls on the same tab previously raced
+  // to "Another debugger is already attached", which surfaced as a random
+  // failure rather than a queued call.
+  if (attachLock.has(tabId)) {
+    return { error: `Debugger already attached to tab ${tabId} by another in-flight command.` };
+  }
+  attachLock.add(tabId);
   const target = { tabId };
-  await chrome.debugger.attach(target, "1.3");
+  try {
+    await chrome.debugger.attach(target, "1.3");
+  } catch (e) {
+    attachLock.delete(tabId);
+    return { error: `debugger attach failed: ${e.message}` };
+  }
   try {
     return await fn(target);
   } finally {
     await chrome.debugger.detach(target).catch(() => {});
+    attachLock.delete(tabId);
   }
 }
 
@@ -564,7 +655,7 @@ async function cmdCdpType(cmd) {
     }
 
     return { typed: true, length: cmd.text.length, method: "cdp-keyevent", targetUrl: tgt.targetUrl, resolvedBy: tgt.resolvedBy };
-  }, cmd.expectUrl);
+  }, cmd.expectUrl, opt(cmd));
 }
 
 /**
@@ -619,7 +710,7 @@ async function cmdCdpClick(cmd) {
     });
 
     return { clicked: true, x, y, method: "cdp", targetUrl: tgt.targetUrl, resolvedBy: tgt.resolvedBy };
-  }, cmd.expectUrl);
+  }, cmd.expectUrl, opt(cmd));
 }
 
 /**
@@ -644,7 +735,7 @@ async function cmdCdpEval(cmd) {
   }
 
   // Use manual debugger management with guaranteed cleanup timeout
-  const drift = await guardTarget(tabId, cmd.expectUrl);
+  const drift = await guardTarget(tabId, cmd.expectUrl, opt(cmd));
   if (drift) return drift;
 
   const target = { tabId };
@@ -725,7 +816,7 @@ async function cmdCdpKeys(cmd) {
       await new Promise((r) => setTimeout(r, k.delay || 100));
     }
     return { sent: true, count: cmd.keys.length, targetUrl: tgt.targetUrl, resolvedBy: tgt.resolvedBy };
-  }, cmd.expectUrl);
+  }, cmd.expectUrl, opt(cmd));
 }
 
 /**
@@ -746,7 +837,7 @@ async function cmdCdpNetworkCapture(cmd) {
     await chrome.windows.update(tab.windowId, { focused: true });
   } catch (_) { /* best effort */ }
 
-  const drift = await guardTarget(tabId, cmd.expectUrl);
+  const drift = await guardTarget(tabId, cmd.expectUrl, opt(cmd));
   if (drift) return drift;
 
   const target = { tabId };
@@ -853,7 +944,7 @@ async function cmdExtractVirtual(cmd) {
   } catch (_) {}
   await new Promise((r) => setTimeout(r, waitMs));
 
-  const drift = await guardTarget(tabId, cmd.expectUrl);
+  const drift = await guardTarget(tabId, cmd.expectUrl, opt(cmd));
   if (drift) return drift;
 
   const target = { tabId };
@@ -1073,6 +1164,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // Chrome id of the tab the message came from.
   if (request.type === "ba-register-tab" && request.tabId && sender.tab?.id) {
     internalToChrome.set(request.tabId, sender.tab.id);
+    persistRegistry();
     sendResponse({ registered: true, chromeTabId: sender.tab.id });
     return false;
   }
@@ -1156,9 +1248,11 @@ chrome.runtime.onStartup.addListener(() => start());
 // Drop registry entries for closed tabs so a recycled Chrome tab id can't be
 // mistaken for a stale relay tab id.
 chrome.tabs.onRemoved.addListener((closedId) => {
+  let changed = false;
   for (const [internalId, chromeId] of internalToChrome) {
-    if (chromeId === closedId) internalToChrome.delete(internalId);
+    if (chromeId === closedId) { internalToChrome.delete(internalId); changed = true; }
   }
+  if (changed) persistRegistry();
 });
 
 // Keepalive alarm for MV3 service worker

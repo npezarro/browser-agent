@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Browser Agent",
-  "version": "2.10.2",
+  "version": "2.11.0",
   "description": "Remote browser automation agent. Content script for page interaction, background service worker for tab management and CDP input.",
   "permissions": [
     "tabs",
@@ -20,10 +20,36 @@
   },
   "content_scripts": [
     {
-      "matches": ["*://*/*"],
-      "js": ["content.js"],
+      "matches": [
+        "*://*/*"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle",
-      "all_frames": false
+      "all_frames": false,
+      "exclude_matches": [
+        "*://myaccount.google.com/*",
+        "*://accounts.google.com/*",
+        "*://mail.google.com/*",
+        "*://*.americanexpress.com/*",
+        "*://*.chase.com/*",
+        "*://*.schwab.com/*",
+        "*://*.fidelity.com/*",
+        "*://*.bankofamerica.com/*",
+        "*://*.wellsfargo.com/*",
+        "*://*.citi.com/*",
+        "*://*.capitalone.com/*",
+        "*://*.paypal.com/*",
+        "*://*.coinbase.com/*",
+        "*://*.1password.com/*",
+        "*://*.lastpass.com/*",
+        "*://*.bitwarden.com/*",
+        "*://*.marriott.com/*",
+        "*://*.hyatt.com/*",
+        "*://*.ihg.com/*",
+        "*://*.hilton.com/*"
+      ]
     }
   ],
   "icons": {

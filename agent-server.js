@@ -82,6 +82,11 @@ function createApp(opts = {}) {
   // account) can route commands to the matching browser's extension instead
   // of fanning them out to whichever extension heartbeated last.
   const extLastHeartbeatByKey = {}; // keyIdx -> last heartbeat ts
+  // keyIdx -> { chromeTabId -> url }, from the extension heartbeat. Unlike
+  // agentTabs (populated by content-script traffic and pruned at TAB_TTL) this
+  // is alive whenever the service worker is, which is precisely the condition
+  // an overnight job runs in.
+  const extTabsByKey = {};
   const extVersionByKey = {};       // keyIdx -> running extension version
   const extCommandsByKey = {};      // keyIdx -> queued commands array
   const EXT_TTL = 30_000;           // 30s — extension heartbeat timeout
@@ -547,6 +552,26 @@ function createApp(opts = {}) {
           // Attach the caller's target-tab context so the extension acts on THAT
           // tab, not whatever is merely active. The extension prefers `tabId`
           // (its internal->chrome map) and falls back to `url`.
+          // chromeTabId is the strongest targeting primitive the extension
+          // accepts, and until now there was no way to SEND one: the CLI and
+          // relay never forwarded it, so every unattended command was forced
+          // onto the weaker relay tab id (which lives in page sessionStorage
+          // and survives navigation). openTab/queryTabs return it; this makes
+          // it round-trippable.
+          if (command.chromeTabId) extCmd.chromeTabId = command.chromeTabId;
+          if (command.allowOrigins) extCmd.allowOrigins = command.allowOrigins;
+          if (command.unsafeAllowSensitive === true) {
+            extCmd.unsafeAllowSensitive = true;
+            console.log(`[SENSITIVE] key=${callerKeyIdx} ${command.action} opted into sensitive origins`);
+          }
+
+          // expectUrl from the extension's own table first: it survives the
+          // content script being throttled, which is when the guard matters.
+          const extTable = extTabsByKey[callerKeyIdx] || {};
+          if (command.chromeTabId && extTable[command.chromeTabId]) {
+            extCmd.expectUrl = extTable[command.chromeTabId];
+          }
+
           if (tid) {
             extCmd.tabId = tid;
             const known = agentTabs[tid] && agentTabs[tid].url;
@@ -556,7 +581,7 @@ function createApp(opts = {}) {
             // because a relay tab id lives in the page's sessionStorage and so
             // survives navigation: an id captured on site A still resolves after
             // that tab has moved to site B (e.g. a logged-in account page).
-            if (known) extCmd.expectUrl = agentTabs[tid].url;
+            if (known && !extCmd.expectUrl) extCmd.expectUrl = agentTabs[tid].url;
           }
         } else if (extAlive) {
           extCmd = translateToExtension(command, tid ? agentTabs[tid] : null, TAB_STALE_MS);
@@ -621,6 +646,13 @@ function createApp(opts = {}) {
         // unpacked extensions, so this drifts from the repo after every deploy;
         // surfacing it is what makes `ext-reload` verifiable instead of hopeful.
         if (state.version) extVersionByKey[keyIdx] = state.version;
+        if (Array.isArray(state.tabs)) {
+          const table = {};
+          for (const t of state.tabs) {
+            if (t && typeof t.chromeTabId === "number" && t.url) table[t.chromeTabId] = t.url;
+          }
+          extTabsByKey[keyIdx] = table;
+        }
         console.log(`[Ext] Heartbeat key=${keyIdx} — tabs: ${state.tabCount || "?"} v${state.version || "?"}`);
       } catch { /* ignored */ }
       return json(res, { ok: true });

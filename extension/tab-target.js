@@ -32,6 +32,78 @@ function originMismatch(expectUrl, actualUrl) {
 }
 
 /**
+ * Origins no browser-agent command may touch unless the caller explicitly opts
+ * in with `unsafeAllowSensitive`.
+ *
+ * This is blast-radius containment for UNATTENDED jobs. A scheduled collector
+ * that mis-resolves a tab at 3am has nobody watching it, so the cost of a
+ * wrong-tab read is unbounded: session cookies, account pages, one-time codes.
+ * Fail-closed targeting already stops a *stale* target from landing here; this
+ * stops a *correctly resolved* one from being acted on at all.
+ *
+ * The opt-in exists because real skills legitimately drive these origins
+ * (OAuth relinks, token refreshes). Those pass the flag and the relay logs it,
+ * so it can never happen by accident.
+ *
+ * Matched on hostname suffix, so "google.com" does NOT match "notgoogle.com".
+ */
+const SENSITIVE_HOSTS = [
+  // Identity / mail — the 2026-07-30 wrong-tab incident landed on the first one.
+  "myaccount.google.com",
+  "accounts.google.com",
+  "mail.google.com",
+  // Financial
+  "americanexpress.com",
+  "chase.com",
+  "schwab.com",
+  "fidelity.com",
+  "bankofamerica.com",
+  "wellsfargo.com",
+  "citi.com",
+  "capitalone.com",
+  "paypal.com",
+  "coinbase.com",
+  // Credential stores / admin surfaces
+  "1password.com",
+  "lastpass.com",
+  "bitwarden.com",
+  "app.brevo.com",
+];
+
+/** Hostname of a URL string, lowercased, or null. */
+function hostOf(u) {
+  try {
+    return new URL(u).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/** True when `url` is on an origin that requires an explicit unsafe opt-in. */
+function isSensitiveOrigin(url) {
+  const h = hostOf(url);
+  if (!h) return false;
+  return SENSITIVE_HOSTS.some((s) => h === s || h.endsWith("." + s));
+}
+
+/**
+ * Error object when `allowOrigins` is present and `url` is not a member, else
+ * null. Absent `allowOrigins`, this is a no-op — existing callers are
+ * unaffected, which is what keeps this from being a breaking change.
+ */
+function allowlistViolation(allowOrigins, url) {
+  if (!Array.isArray(allowOrigins) || allowOrigins.length === 0) return null;
+  const got = originOf(url);
+  if (got && allowOrigins.includes(got)) return null;
+  return {
+    error:
+      `Target origin ${got || "(unparseable)"} is not in this command's allowOrigins ` +
+      `[${allowOrigins.join(", ")}]. Refusing to act on it.`,
+    deniedOrigin: got,
+  };
+}
+
+/**
  * Pure target-resolution core (no chrome.* calls, so it is unit-testable).
  *
  * SECURITY — this FAILS CLOSED. When the caller names a target (relay `tabId`,
@@ -114,11 +186,33 @@ function resolveTargetCore(cmd, tabs, registry, activeTabId) {
   const mismatch = originMismatch(cmd.expectUrl, tab.url);
   if (mismatch) return { ...mismatch, resolvedBy };
 
+  // Containment, applied AFTER the tab is chosen and regardless of HOW it was
+  // named: an explicit chromeTabId pointing at a bank tab is still refused.
+  // Order matters — hard-deny outranks the per-command allowlist so a job
+  // cannot allowlist its way onto a credential page.
+  if (isSensitiveOrigin(tab.url) && cmd.unsafeAllowSensitive !== true) {
+    return {
+      error:
+        `Refusing to act on sensitive origin ${originOf(tab.url)}. This origin is ` +
+        `hard-denied for browser-agent commands; pass unsafeAllowSensitive if a ` +
+        `human-supervised skill genuinely needs it.`,
+      resolvedBy,
+      deniedOrigin: originOf(tab.url),
+      sensitive: true,
+    };
+  }
+
+  const denied = allowlistViolation(cmd.allowOrigins, tab.url);
+  if (denied) return { ...denied, resolvedBy };
+
   return { tabId: tab.id, resolvedBy, targetUrl: tab.url || null };
 }
 
 // Node (`node --test`) only; in the service worker `module` is undefined and the
 // declarations above are already globals reachable from background.js.
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { resolveTargetCore, originMismatch, originOf };
+  module.exports = {
+    resolveTargetCore, originMismatch, originOf,
+    isSensitiveOrigin, allowlistViolation, hostOf, SENSITIVE_HOSTS,
+  };
 }

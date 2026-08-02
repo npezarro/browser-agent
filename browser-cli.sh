@@ -97,14 +97,42 @@ is_tab_id() {
 split_target() {
   CDP_TAB=""
   CDP_URL=""
+  CDP_CHROME_TAB=""
   local t="${1:-}"
   if [ -z "$t" ]; then
     CDP_TAB="$DEFAULT_TAB"
+  elif [[ "$t" =~ ^[0-9]{1,9}$ ]]; then
+    # A bare integer is a CHROME tab id (what `open` and `tabs` return as
+    # chromeTabId). This is the strongest targeting primitive the extension
+    # accepts and, until 2.11.0, there was no way to send one -- so every
+    # unattended command was forced onto the relay tab id, which lives in page
+    # sessionStorage and therefore survives navigation. It is also the ONLY
+    # usable primitive on origins excluded from the content script (the hotel
+    # chains), where no relay tab id is ever minted.
+    CDP_CHROME_TAB="$t"
   elif is_tab_id "$t"; then
     CDP_TAB="$t"
   else
     CDP_URL="$t"
   fi
+}
+
+# Extra JSON fields merged into an interactive command: the resolved Chrome tab
+# id plus any caller-supplied origin containment. Emitted as a JSON OBJECT so it
+# composes with the jq builders every command already uses.
+#
+#   BA_ALLOW_ORIGINS='["https://www.hyatt.com"]' browser-cli cdp-eval "expr" 12345
+#
+# BA_UNSAFE_ALLOW_SENSITIVE=1 opts into the hard-denied origins (bank/identity
+# pages). The relay logs every use, so it can never be accidental.
+target_json() {
+  jq -nc \
+    --arg ct "${CDP_CHROME_TAB:-}" \
+    --arg ao "${BA_ALLOW_ORIGINS:-}" \
+    --arg us "${BA_UNSAFE_ALLOW_SENSITIVE:-}" \
+    '(if $ct != "" then {chromeTabId: ($ct|tonumber)} else {} end)
+     + (if $ao != "" then {allowOrigins: ($ao|fromjson)} else {} end)
+     + (if $us == "1" then {unsafeAllowSensitive: true} else {} end)'
 }
 
 # Synchronous command: POST to /agent/interactive, block for result
@@ -226,6 +254,90 @@ case "$cmd" in
     # Check if companion extension is connected. `stale:true` means the browser is
     # running older code than this checkout ships — run `ext-reload`.
     curl -s "$API/ext/status" -H "$auth_header" | jq .
+    ;;
+
+  health)
+    # Four-state liveness probe. `ext-status` alone is NOT sufficient: it proves
+    # only that the background service worker is POLLING, and there are two
+    # real states where it reports connected:true with a fresh heartbeat while
+    # the browser is unusable for the thing you want to do.
+    #
+    #   green     everything works
+    #   cdp-only  content script throttled (window minimised / occluded /
+    #             display off). ping/state/text/eval/click all time out; cdp-*
+    #             and the service worker keep working. THIS IS THE EXPECTED
+    #             OVERNIGHT STATE -- proceed with cdp-* verbs, do not alert.
+    #   red       browser genuinely unreachable
+    #
+    # Step 4 is the anti-regression gate for the 2026-07-30 wrong-tab bug: it
+    # asserts a NAMED target resolves by chromeTabId/registry and lands on the
+    # expected origin. An unattended job must run this before touching anything
+    # sensitive, and abort if it ever reports resolvedBy=activeTab.
+    probe_nonce="ba-$(date +%s)-$RANDOM"
+    # Derived from the configured relay URL, never hardcoded: the probe must
+    # land on whatever deployment this CLI actually talks to, and this file is
+    # in a public repo.
+    probe_origin="$(printf '%s' "$API" | sed -E 's#^(https?://[^/]+).*#\1#')"
+    probe_url="${probe_origin}/travel/api/health?ba=${probe_nonce}"
+
+    hs="$(curl -s -m 10 "$API/ext/status" -H "$auth_header")"
+    bg_connected="$(echo "$hs" | jq -r '.connected // false')"
+    ext_ver="$(echo "$hs" | jq -r '.version // "?"')"
+    exp_ver="$(echo "$hs" | jq -r '.expectedVersion // "?"')"
+    is_stale="$(echo "$hs" | jq -r '.stale // false')"
+
+    background="down"; worker="down"; content="down"; cdp="down"; resolved_by=""
+    [ "$bg_connected" = "true" ] && background="ok"
+
+    if [ "$background" = "ok" ]; then
+      # Does the worker actually EXECUTE, or does it merely poll? A fresh
+      # heartbeat with a hung command loop is a real state ext-status cannot see.
+      tabs_out="$(interactive "" '"'"'{action:"queryTabs"}'"'"' 12 2>/dev/null)"
+      echo "$tabs_out" | jq -e '.tabs' >/dev/null 2>&1 && worker="ok" || worker="timeout"
+    fi
+
+    if [ "$worker" = "ok" ]; then
+      # Open OUR OWN origin with a nonce, so this can never collide with an
+      # existing tab -- including one belonging to the other browser profile,
+      # which `ensure` would happily return (both keys see the union of tabs).
+      open_out="$(interactive "" "$(jq -nc --arg u "$probe_url" \
+        '"'"'{action:"openTabBackground", url:$u}'"'"')" 20 2>/dev/null)"
+      probe_tab="$(echo "$open_out" | jq -r '.chromeTabId // empty')"
+
+      if [ -n "$probe_tab" ]; then
+        sleep 2
+        # Content script alive AND unthrottled?
+        ping_out="$(interactive "" "$(jq -nc --argjson c "$probe_tab" \
+          '"'"'{action:"ping", chromeTabId:$c}'"'"')" 10 2>/dev/null)"
+        echo "$ping_out" | jq -e '.pong // .ok // .alive' >/dev/null 2>&1 \
+          && content="ok" || content="throttled"
+
+        # CDP path AND correct targeting.
+        cdp_out="$(CDP_CHROME_TAB="$probe_tab" interactive "" "$(jq -nc --argjson c "$probe_tab" \
+          '"'"'{action:"cdpEval", expression:"location.origin", awaitPromise:false, chromeTabId:$c}'"'"')" 25 2>/dev/null)"
+        resolved_by="$(echo "$cdp_out" | jq -r '.resolvedBy // "?"')"
+        cdp_origin="$(echo "$cdp_out" | jq -r '.value // ""')"
+        if [ "$cdp_origin" = "$probe_origin" ] && [ "$resolved_by" != "activeTab" ]; then
+          cdp="ok"
+        elif [ -n "$cdp_origin" ]; then
+          cdp="mistarget"
+        fi
+        interactive "" "$(jq -nc --argjson c "$probe_tab" '"'"'{action:"closeTab", chromeTabId:$c}'"'"')" 10 >/dev/null 2>&1
+      fi
+    fi
+
+    verdict="red"
+    if [ "$cdp" = "ok" ] && [ "$content" = "ok" ]; then verdict="green"
+    elif [ "$cdp" = "ok" ]; then verdict="cdp-only"; fi
+    # A mistarget is never "degraded" -- it means containment failed.
+    [ "$cdp" = "mistarget" ] && verdict="red"
+
+    jq -nc --arg b "$background" --arg w "$worker" --arg c "$content" \
+      --arg d "$cdp" --arg v "$verdict" --arg ev "$ext_ver" --arg xv "$exp_ver" \
+      --arg rb "$resolved_by" --argjson st "${is_stale:-false}" \
+      '{background:$b, workerExec:$w, contentScript:$c, cdp:$d,
+        extVersion:$ev, expectedVersion:$xv, stale:$st, resolvedBy:$rb, verdict:$v}'
+    [ "$verdict" = "red" ] && exit 1 || exit 0
     ;;
 
   ext-reload)
@@ -535,7 +647,8 @@ EOF
     split_target "$local_url3"
     interactive "$CDP_TAB" "$(jq -nc --arg e "$eval_expr" --arg u "$CDP_URL" \
       --argjson a "$await_promise" --argjson f "$focus_tab" --argjson s "$scroll_page" \
-      '{action:"cdpEval", expression:$e, awaitPromise:$a, focus:$f, scroll:$s} + if $u != "" then {url:$u} else {} end')"
+      --argjson t "$(target_json)" \
+      '{action:"cdpEval", expression:$e, awaitPromise:$a, focus:$f, scroll:$s} + $t + if $u != "" then {url:$u} else {} end')"
     ;;
 
   form-fill|ff)
@@ -595,7 +708,8 @@ parts.append("return JSON.stringify({filled:filled,missing:missing,submitted:!!b
 print("".join(parts))
 ')"
     interactive "$CDP_TAB" "$(jq -nc --arg e "$ff_js" --arg u "$CDP_URL" \
-      '{action:"cdpEval", expression:$e, awaitPromise:true} + if $u != "" then {url:$u} else {} end')"
+      --argjson t "$(target_json)" \
+      '{action:"cdpEval", expression:$e, awaitPromise:true} + $t + if $u != "" then {url:$u} else {} end')"
     ;;
 
   cdp-keys|ck)

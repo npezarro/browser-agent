@@ -73,8 +73,16 @@ test("unknown chromeTabId is refused rather than redirected", () => {
 });
 
 test("active tab is used only when no target is named at all", () => {
-  const out = resolveTargetCore({}, TABS, new Map(), ACTIVE);
-  assert.strictEqual(out.tabId, ACTIVE);
+  // CHANGED in ext 2.11.0, deliberately. This previously asserted against
+  // ACTIVE (tab 22), which is the myaccount.google.com fixture from the
+  // original wrong-tab incident. The origin hard-deny now REFUSES that tab,
+  // and the refusal is the whole point: the active-tab default is the one path
+  // with no caller intent behind it, so it is exactly where an unnoticed
+  // credential-page read would happen. The sensitive case is asserted in
+  // "an unnamed command still cannot land on a sensitive active tab"; this
+  // test keeps covering the fallback itself, against a benign active tab.
+  const out = resolveTargetCore({}, TABS, new Map(), 33);
+  assert.strictEqual(out.tabId, 33);
   assert.strictEqual(out.resolvedBy, "activeTab");
 });
 
@@ -139,4 +147,100 @@ test("reloadExtension routes to the extension when it is alive", () => {
 test("reloadExtension does not route when the extension is dead", () => {
   const now = Date.now();
   assert.strictEqual(shouldRouteToExtension("reloadExtension", now - 120000, 60000, now), false);
+});
+
+// ---------------------------------------------------------------------------
+// Origin containment (ext 2.11.0)
+//
+// Fail-closed resolution stops a STALE target from landing somewhere unnamed.
+// These cover the other half: a CORRECTLY resolved target that the caller
+// should still not be allowed to act on. That matters for unattended jobs,
+// where a wrong-origin read has nobody watching it.
+// ---------------------------------------------------------------------------
+
+const {
+  isSensitiveOrigin, allowlistViolation,
+} = require("../extension/tab-target.js");
+
+test("isSensitiveOrigin matches the host and its subdomains", () => {
+  assert.equal(isSensitiveOrigin("https://myaccount.google.com/security"), true);
+  assert.equal(isSensitiveOrigin("https://www.chase.com/"), true);
+  assert.equal(isSensitiveOrigin("https://global.americanexpress.com/x"), true);
+});
+
+test("isSensitiveOrigin does NOT match a lookalike suffix", () => {
+  // The check must be host-or-dot-suffix, never a bare substring, or
+  // "notchase.com" / "chase.com.evil.tld" would read as sensitive (or worse,
+  // an attacker-chosen host would read as safe under a naive includes()).
+  assert.equal(isSensitiveOrigin("https://notchase.com/"), false);
+  assert.equal(isSensitiveOrigin("https://chase.com.evil.tld/"), false);
+  assert.equal(isSensitiveOrigin("https://hyatt.com/"), false);
+});
+
+test("a sensitive origin is refused even when named by chromeTabId", () => {
+  // The strongest possible targeting signal must NOT be an override. The
+  // 2026-07-30 incident read a myaccount.google.com tab; naming it explicitly
+  // should still be refused.
+  const out = resolveTargetCore({ chromeTabId: 22 }, TABS, new Map(), ACTIVE);
+  assert.ok(out.error, "expected refusal");
+  assert.equal(out.sensitive, true);
+  assert.equal(out.tabId, undefined);
+});
+
+test("unsafeAllowSensitive is the documented escape hatch", () => {
+  // Real skills (OAuth relinks, token refreshes) legitimately drive these
+  // origins. The opt-in must work, and it is logged relay-side.
+  const out = resolveTargetCore(
+    { chromeTabId: 22, unsafeAllowSensitive: true }, TABS, new Map(), ACTIVE
+  );
+  assert.equal(out.tabId, 22);
+  assert.equal(out.resolvedBy, "chromeTabId");
+});
+
+test("allowOrigins refuses a tab outside the list", () => {
+  const out = resolveTargetCore(
+    { chromeTabId: 33, allowOrigins: ["https://www.hyatt.com"] }, TABS, new Map(), ACTIVE
+  );
+  assert.ok(out.error);
+  assert.equal(out.deniedOrigin, "https://example.com");
+});
+
+test("allowOrigins permits a tab inside the list", () => {
+  const tabs = [{ id: 44, url: "https://www.hyatt.com/shop/rooms/x" }];
+  const out = resolveTargetCore(
+    { chromeTabId: 44, allowOrigins: ["https://www.hyatt.com"] }, tabs, new Map(), 44
+  );
+  assert.equal(out.tabId, 44);
+});
+
+test("hard-deny OUTRANKS allowOrigins", () => {
+  // A job must not be able to allowlist its way onto a credential page.
+  const out = resolveTargetCore(
+    { chromeTabId: 22, allowOrigins: ["https://myaccount.google.com"] },
+    TABS, new Map(), ACTIVE
+  );
+  assert.ok(out.error);
+  assert.equal(out.sensitive, true);
+});
+
+test("NO allowOrigins behaves exactly as before (no regression)", () => {
+  // The containment must be opt-in for existing consumers, or every current
+  // skill breaks on upgrade.
+  const out = resolveTargetCore({ chromeTabId: 33 }, TABS, new Map(), ACTIVE);
+  assert.equal(out.tabId, 33);
+  assert.equal(out.resolvedBy, "chromeTabId");
+  assert.equal(out.error, undefined);
+});
+
+test("allowlistViolation is a no-op when the list is absent or empty", () => {
+  assert.equal(allowlistViolation(undefined, "https://anything.com/"), null);
+  assert.equal(allowlistViolation([], "https://anything.com/"), null);
+});
+
+test("an unnamed command still cannot land on a sensitive active tab", () => {
+  // The active-tab default is the one path with no caller intent behind it, so
+  // it is exactly where an unnoticed credential-page read would happen.
+  const out = resolveTargetCore({}, TABS, new Map(), ACTIVE);
+  assert.ok(out.error);
+  assert.equal(out.sensitive, true);
 });
