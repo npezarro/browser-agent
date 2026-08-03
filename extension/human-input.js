@@ -209,7 +209,13 @@ function mousePath(from, to, rng, opts) {
   const dist = Math.hypot(dx, dy);
   if (dist < 1) return [{ x: Math.round(to.x), y: Math.round(to.y) }];
 
-  const steps = Math.round(clamp(dist / 34, 6, 26));
+  // Waypoint count is deliberately low. Each point costs a whole
+  // chrome.debugger.sendCommand round trip, and those were measured at roughly
+  // a second each against this relay (a bare 3-call --fast click takes ~6.7s
+  // end to end), so a 26-point path pushed a single click past the relay's 30s
+  // command timeout. Realism is in the SHAPE of the path, not its resolution:
+  // a dozen bowed, decelerating, integral samples read the same as forty.
+  const steps = Math.round(clamp(dist / 60, 5, 14));
   const nx = -dy / dist, ny = dx / dist;
   const bow = dist * (0.06 + rng() * 0.12) * (rng() < 0.5 ? -1 : 1);
   const c1 = { x: from.x + dx * 0.3 + nx * bow, y: from.y + dy * 0.3 + ny * bow };

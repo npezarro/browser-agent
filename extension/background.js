@@ -745,17 +745,38 @@ async function cmdCdpClick(cmd) {
     }
 
     let pathLen = 1;
+    let pathTruncated = false;
     if (humanize) {
       const from = lastPointer.get(tabId) || idlePointer(viewport, rng);
       const pts = mousePath(from, to, rng);
       const waits = moveDelays(pts.length, rng);
+      // Each dispatch is a full chrome.debugger round trip, measured at roughly
+      // a second each against this relay, which is already longer than any gap
+      // we would have inserted. So sleep only the REMAINDER of the intended gap
+      // (usually zero in practice), and abandon the rest of the path outright
+      // if the approach is eating the command timeout. An approach path is a
+      // nicety; a timed-out click is a broken command, and worse, one that
+      // leaves the debugger attached until the 55s safety timer fires.
+      const deadline = Date.now() + (cmd.moveBudgetMs || 6000);
       for (let i = 0; i < pts.length; i++) {
+        const started = Date.now();
         await cdp(target, "Input.dispatchMouseEvent", {
           type: "mouseMoved", x: pts[i].x, y: pts[i].y, buttons: 0,
         });
-        await new Promise((r) => setTimeout(r, waits[i]));
+        pathLen = i + 1;
+        const remaining = waits[i] - (Date.now() - started);
+        if (remaining > 0) await new Promise((r) => setTimeout(r, remaining));
+
+        if (Date.now() > deadline && i < pts.length - 1) {
+          // Jump to the final point so the press still lands where we aimed.
+          await cdp(target, "Input.dispatchMouseEvent", {
+            type: "mouseMoved", x: to.x, y: to.y, buttons: 0,
+          });
+          pathLen = i + 2;
+          pathTruncated = true;
+          break;
+        }
       }
-      pathLen = pts.length;
 
       const { settleMs, holdMs } = clickTiming(rng);
       await new Promise((r) => setTimeout(r, settleMs));
@@ -787,6 +808,9 @@ async function cmdCdpClick(cmd) {
       y: to.y,
       method: humanize ? "cdp-humanized" : "cdp",
       pathPoints: pathLen,
+      // Surfaced, not silent: a truncated approach means the transport was slow
+      // enough to eat the budget, which is worth seeing in a log.
+      ...(pathTruncated ? { pathTruncated: true } : {}),
       targetUrl: tgt.targetUrl,
       resolvedBy: tgt.resolvedBy,
     };

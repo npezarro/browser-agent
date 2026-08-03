@@ -488,3 +488,27 @@ Corollaries from the same session:
 - Prefer the element's native activation (input.click() on a checkbox) over synthesized coordinate clicks; it is what actually flipped the control here.
 - When several similar controls exist, a generic selector silently hits the first. This page had TWO label.switch>span.slider pairs ('Accessible Room' and 'Use Points'). Scope with :has(), e.g. label.switch:has(input[aria-label='Use Points']) span.slider.
 - Placeholder text mimics data. The only points-like string while loading was '1234 Points', a skeleton. Do not accept the first regex hit as a value.
+
+## v2.12.1 ext: the approach path has to respect the transport (2026-08-03)
+
+**Measured, not assumed:** each `chrome.debugger.sendCommand` Input dispatch costs on the
+order of a **second** against this relay. A bare `--fast` click (3 CDP calls) takes ~6.7s
+end to end. The first cut of humanized click used up to 26 waypoints, each awaited and each
+followed by an artificial gap, which pushed a single click past the relay's **30s command
+timeout** — and a timeout there is worse than slow, because `withDebugger` then holds the
+debugger attached until its **55s safety timer**, so the *next* command fails with
+"Another debugger is already attached".
+
+Three changes, all in service of the same rule: **realism lives in the shape of the path,
+not its resolution.**
+
+- Waypoints capped at `clamp(dist/60, 5, 14)` (was `clamp(dist/34, 6, 26)`).
+- The intended inter-move gap is now a *remainder*: sleep `waits[i] - elapsedRpcTime`, which
+  is almost always zero, because the transport already imposes a human-scale gap on its own.
+- A `moveBudgetMs` deadline (default 6s) abandons the remaining waypoints and jumps straight
+  to the final point, so the press still lands where it aimed. The result carries
+  `pathTruncated: true` when this fires — surfaced, never silent.
+
+**Transferable:** when synthesising timing over a slow transport, measure the transport
+first. Delays that assume a free channel become the timeout when the channel costs more than
+the delay does.
