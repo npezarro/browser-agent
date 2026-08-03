@@ -245,12 +245,21 @@ case "$cmd" in
     ;;
 
   close|close-tab)
-    interactive "${1:-$DEFAULT_TAB}" '{"action":"closeTab"}'
+    split_target "${1:-}"
+    interactive "$CDP_TAB" "$(jq -nc --arg u "$CDP_URL" --argjson t "$(target_json)" \
+      '{action:"closeTab"} + $t + if $u != "" then {url:$u} else {} end')"
     ;;
 
   focus)
-    # Focus a tab by URL (requires extension)
-    interactive "" "$(jq -nc --arg u "${1:?url required}" '{action:"focusTab", url:$u}')"
+    # Focus a tab by chrome tab id, relay tab id, or URL substring.
+    #
+    # Previously URL-ONLY: a bare chromeTabId was sent as url:"<id>", matched no
+    # tab, and returned "Target tab not found (url match ...)". Same incomplete
+    # -plumbing class as the cdp-* verbs -- fixing split_target alone did not
+    # reach the commands that build their own JSON.
+    split_target "${1:?target required}"
+    interactive "$CDP_TAB" "$(jq -nc --arg u "$CDP_URL" --argjson t "$(target_json)" \
+      '{action:"focusTab"} + $t + if $u != "" then {url:$u} else {} end')"
     ;;
 
   ext-status)
