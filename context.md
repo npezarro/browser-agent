@@ -304,3 +304,33 @@ Full session closeout: privateContext/deliverables/closeouts/2026-08-01-staples-
 
 ## Active Branch
 `master`
+
+## 2026-08-02 — ext 2.11.0: origin containment + durable tab registry
+
+**State: WORKING**, deployed to both profiles (main + alt Brave), 217/217 tests pass.
+
+- **Tab registry now survives the MV3 service worker.** It was a module-level
+  `Map`; Chrome kills the worker after ~30s idle, and only a content-script
+  `registerTab` repopulates it. The relay keeps LISTING tabs for 120s, so `tabs`
+  looked healthy while every relay-tabId target failed. Now mirrored into
+  `chrome.storage.session`.
+- **Origin containment:** hard-deny list (identity/bank hosts, host-or-dot-suffix
+  matched) + per-command `allowOrigins`. Hard-deny outranks allowOrigins.
+  `unsafeAllowSensitive` is the logged escape hatch. Absent allowOrigins,
+  behaviour is byte-identical to 2.10.2.
+- **cmdCloseTab/cmdFocusTab** no longer bypass resolveTarget.
+- **expectUrl** now sourced from the extension's heartbeat tab table, so it does
+  not silently disable itself when the content script is throttled.
+- **chromeTabId plumbed end to end** (CLI -> relay -> extension). Required,
+  because `exclude_matches` removes the content script from chain domains so no
+  relay tab id is ever minted there.
+- New `browser-cli ext-health`: 4-state probe returning green | cdp-only | red.
+  **cdp-only is the expected overnight state**, not an anomaly.
+
+**Gotcha that bit three times:** when threading a new field through the CLI, grep
+for EVERY command that builds its own action JSON. Fixing `split_target` did not
+reach the cdp-* verbs; fixing those did not reach network-capture/extract-virtual;
+fixing those did not reach `focus`/`close` (which were URL-only and silently
+ignored tab ids, leaking a tab after every collector page).
+
+Full closeout: privateContext/deliverables/closeouts/2026-08-02-travel-price-history-and-chain-award-collectors.md
