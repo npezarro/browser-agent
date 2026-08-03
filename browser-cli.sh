@@ -48,9 +48,19 @@
 #                                 Capture screenshot. --full = whole page (CDP), --selector = element only.
 #                                 --blob returns a relay-hosted URL instead of writing to disk.
 #   see "<question>" [url] [...]  Capture screenshot and ask Claude a question about it
+#   fingerprint-audit [tabId]     Read-only report of how this browser looks to bot
+#                                 mitigation, plus a `flags` array of inconsistencies.
+#                                 Diagnoses; never spoofs. See the command for why.
 #
 # Flags (append to click/click-any):
 #   --nth N                       Click the Nth match (default: 1st)
+#
+# Flags (append to cdp-click/cdp-type) — ext 2.12.0+:
+#   --fast                        Skip humanized kinematics (old teleport/metronome
+#                                 path). Faster and deterministic; use when the page
+#                                 does no behavioural scoring.
+#   --seed N                      Pin the RNG so an interaction replays exactly.
+#   --delay MS                    cdp-type only: MEAN inter-key interval (def. 105).
 #
 # Cowork commands:
 #   cowork-status                 Check if Cowork panel is active
@@ -629,18 +639,60 @@ EOF
 
   cdp-type|ct)
     # Type via Chrome DevTools Protocol (trusted events — works on React/FB)
-    # Usage: cdp-type <selector> <text> [tabUrl]
-    split_target "${3:-}"
-    interactive "$CDP_TAB" "$(jq -nc --arg s "${1:?selector required}" --arg t "${2:?text required}" --arg u "$CDP_URL" --argjson tf "$(target_json)" \
-      '$tf + if $u != "" then {action:"cdpType", selector:$s, text:$t, url:$u} else {action:"cdpType", selector:$s, text:$t} end')"
+    # Usage: cdp-type <selector> <text> [tabUrl] [--fast] [--seed N] [--delay MS]
+    #
+    # Humanized by default (ext 2.12.0+): correct event.code/keyCode per US
+    # layout, lognormal inter-key intervals instead of a fixed 30ms metronome.
+    # --delay sets the MEAN interval, not a constant. --fast restores the old
+    # fixed-interval path for speed-critical callers (descriptors stay correct).
+    # --seed pins the RNG so a failing interaction replays exactly.
+    ct_sel="${1:?selector required}"; ct_text="${2:?text required}"; shift 2
+    ct_target=""; ct_human="true"; ct_seed=""; ct_delay=""; ct_next=""
+    for arg in "$@"; do
+      if [ -n "$ct_next" ]; then eval "$ct_next=\$arg"; ct_next=""; continue; fi
+      case "$arg" in
+        --fast)  ct_human="false" ;;
+        --seed)  ct_next="ct_seed" ;;
+        --delay) ct_next="ct_delay" ;;
+        *)       ct_target="$arg" ;;
+      esac
+    done
+    split_target "$ct_target"
+    interactive "$CDP_TAB" "$(jq -nc --arg s "$ct_sel" --arg t "$ct_text" --arg u "$CDP_URL" \
+      --argjson h "$ct_human" --arg sd "$ct_seed" --arg dl "$ct_delay" --argjson tf "$(target_json)" \
+      '{action:"cdpType", selector:$s, text:$t, humanize:$h}
+       + $tf
+       + (if $u  != "" then {url:$u}                else {} end)
+       + (if $sd != "" then {seed:($sd|tonumber)}   else {} end)
+       + (if $dl != "" then {delay:($dl|tonumber)}  else {} end)')"
     ;;
 
   cdp-click|cc)
     # Click via Chrome DevTools Protocol (trusted events)
-    # Usage: cdp-click <selector> [tabUrl]
-    split_target "${2:-}"
-    interactive "$CDP_TAB" "$(jq -nc --arg s "${1:?selector required}" --arg u "$CDP_URL" --argjson tf "$(target_json)" \
-      '$tf + if $u != "" then {action:"cdpClick", selector:$s, url:$u} else {action:"cdpClick", selector:$s} end')"
+    # Usage: cdp-click <selector> [tabUrl] [--fast] [--seed N]
+    #
+    # Humanized by default (ext 2.12.0+): the cursor travels a bowed path from
+    # wherever it was last left in this tab, lands on an integral point scattered
+    # inside the element (not its sub-pixel centroid), dwells, then holds the
+    # button down for a real interval. --fast restores the old single-teleport
+    # path when speed matters more than plausibility.
+    cc_sel="${1:?selector required}"; shift
+    cc_target=""; cc_human="true"; cc_seed=""; cc_next=""
+    for arg in "$@"; do
+      if [ -n "$cc_next" ]; then eval "$cc_next=\$arg"; cc_next=""; continue; fi
+      case "$arg" in
+        --fast) cc_human="false" ;;
+        --seed) cc_next="cc_seed" ;;
+        *)      cc_target="$arg" ;;
+      esac
+    done
+    split_target "$cc_target"
+    interactive "$CDP_TAB" "$(jq -nc --arg s "$cc_sel" --arg u "$CDP_URL" \
+      --argjson h "$cc_human" --arg sd "$cc_seed" --argjson tf "$(target_json)" \
+      '{action:"cdpClick", selector:$s, humanize:$h}
+       + $tf
+       + (if $u  != "" then {url:$u}              else {} end)
+       + (if $sd != "" then {seed:($sd|tonumber)} else {} end)')"
     ;;
 
   cdp-eval|ce)
@@ -661,6 +713,113 @@ EOF
       --argjson a "$await_promise" --argjson f "$focus_tab" --argjson s "$scroll_page" \
       --argjson t "$(target_json)" \
       '{action:"cdpEval", expression:$e, awaitPromise:$a, focus:$f, scroll:$s} + $t + if $u != "" then {url:$u} else {} end')"
+    ;;
+
+  fingerprint-audit|fpa)
+    # Read-only audit of what this browser looks like to bot mitigation.
+    # Usage: fingerprint-audit [tabIdOrUrl]
+    #
+    # This DIAGNOSES, it does not spoof. The premise of this whole agent is that
+    # the hardware is real (real GPU, real display, real residential IP, real
+    # profile), so the passive surfaces should already be coherent and the
+    # correct action on a finding is to fix the cause, not to patch the getter.
+    # Patching is itself a signal: `patchedNatives` below exists to catch a
+    # previous well-meaning "stealth" fix having made things worse.
+    #
+    # Prints the probe object plus a `flags` array naming each inconsistency.
+    read -r -d '' fpa_probe <<'FPAJS' || true
+(async () => {
+  const out = {}, flags = [], nav = navigator;
+
+  out.webdriver = nav.webdriver === true;
+  if (out.webdriver) flags.push('navigator.webdriver is true: this browser was launched with --enable-automation (ChromeDriver/Puppeteer). Extension + chrome.debugger control does NOT set it, so seeing it here means the wrong browser is being driven.');
+
+  out.userAgent = nav.userAgent;
+  out.platform = nav.platform;
+  out.languages = nav.languages;
+  out.language = nav.language;
+  out.hardwareConcurrency = nav.hardwareConcurrency;
+  out.deviceMemory = nav.deviceMemory === undefined ? null : nav.deviceMemory;
+  out.maxTouchPoints = nav.maxTouchPoints;
+  out.plugins = nav.plugins.length;
+  out.mimeTypes = nav.mimeTypes.length;
+  out.pdfViewerEnabled = nav.pdfViewerEnabled;
+
+  if (nav.languages && nav.language && nav.languages[0] !== nav.language) flags.push('navigator.language does not match navigator.languages[0]: a classic sloppy-override signature.');
+  if (nav.plugins.length === 0) flags.push('navigator.plugins is empty: normal for some configs but a headless correlate when combined with other flags.');
+
+  try {
+    const hi = nav.userAgentData ? await nav.userAgentData.getHighEntropyValues(['platform','platformVersion','architecture','model','uaFullVersion','bitness']) : null;
+    out.uaData = hi;
+    if (hi) {
+      const uaWin = /Windows NT/.test(nav.userAgent);
+      if (uaWin !== (hi.platform === 'Windows')) flags.push('UA string and UA-CH disagree on the OS (UA-CH says ' + hi.platform + '): the single most common spoofing tell.');
+    }
+  } catch (e) { out.uaData = 'error: ' + e.message; }
+
+  out.screen = { w: screen.width, h: screen.height, availW: screen.availWidth, availH: screen.availHeight, colorDepth: screen.colorDepth, dpr: devicePixelRatio };
+  out.window = { innerW: innerWidth, innerH: innerHeight, outerW: outerWidth, outerH: outerHeight };
+  out.browserChromeHeight = outerHeight - innerHeight;
+  if (screen.width < innerWidth || screen.height < innerHeight) flags.push('the viewport is larger than the screen: impossible on real hardware.');
+  if (outerHeight - innerHeight <= 0) flags.push('outerHeight <= innerHeight: no browser chrome at all, typical of headless.');
+  if (screen.availWidth === screen.width && screen.availHeight === screen.height) flags.push('availWidth/Height exactly equal width/height: no OS taskbar, common on headless and on VMs.');
+
+  try {
+    const c = document.createElement('canvas');
+    const gl = c.getContext('webgl') || c.getContext('experimental-webgl');
+    const dbg = gl && gl.getExtension('WEBGL_debug_renderer_info');
+    out.webgl = dbg
+      ? { vendor: gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL), renderer: gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) }
+      : (gl ? 'webgl present, no debug_renderer_info' : 'no webgl context');
+    const r = (out.webgl && out.webgl.renderer) || '';
+    if (/SwiftShader|llvmpipe|Software|Mesa OffScreen/i.test(r)) flags.push('WebGL renderer is a software rasteriser (' + r + '): no real GPU in use, a strong headless/VM signal.');
+  } catch (e) { out.webgl = 'error: ' + e.message; }
+
+  try {
+    const st = (await nav.permissions.query({ name: 'notifications' })).state;
+    out.permissions = { notificationsQuery: st, notificationPermission: Notification.permission };
+    if (Notification.permission === 'denied' && st === 'prompt') flags.push('Notification.permission=denied while permissions.query reports prompt: the canonical headless Chrome mismatch.');
+  } catch (e) { out.permissions = 'error: ' + e.message; }
+
+  out.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  out.timezoneOffsetMin = new Date().getTimezoneOffset();
+
+  const patched = [];
+  const natives = [
+    ['HTMLCanvasElement.toDataURL', HTMLCanvasElement.prototype.toDataURL],
+    ['HTMLCanvasElement.getContext', HTMLCanvasElement.prototype.getContext],
+    ['WebGLRenderingContext.getParameter', window.WebGLRenderingContext && window.WebGLRenderingContext.prototype.getParameter],
+    ['Date.getTimezoneOffset', Date.prototype.getTimezoneOffset],
+    ['AudioBuffer.getChannelData', window.AudioBuffer && window.AudioBuffer.prototype.getChannelData],
+    ['Permissions.query', nav.permissions && nav.permissions.query],
+  ];
+  for (const [name, fn] of natives) {
+    try { if (fn && !/\{\s*\[native code\]\s*\}/.test(Function.prototype.toString.call(fn))) patched.push(name); } catch (e) { /* inaccessible */ }
+  }
+  out.patchedNatives = patched;
+  if (patched.length) flags.push('these built-ins are no longer native: ' + patched.join(', ') + '. On genuine hardware nothing needs patching, and a patch is more detectable than the value it hides. Find what installed them.');
+
+  let cdpSeen = false;
+  try {
+    const err = new Error('probe');
+    Object.defineProperty(err, 'stack', { configurable: true, get() { cdpSeen = true; return ''; } });
+    console.debug(err);
+  } catch (e) { /* ignore */ }
+  out.cdpConsoleProbe = cdpSeen;
+  if (cdpSeen) flags.push('the page can observe an attached debugger by watching console serialisation of Error.stack. NOTE: this probe necessarily runs WITH chrome.debugger attached, so it reports the CDP command window only, not idle browsing.');
+
+  out.flags = flags;
+  out.verdict = flags.length === 0 ? 'no inconsistencies detected' : flags.length + ' finding(s)';
+  return JSON.stringify(out, null, 2);
+})()
+FPAJS
+    split_target "${1:-}"
+    fpa_out=$(interactive "$CDP_TAB" "$(jq -nc --arg e "$fpa_probe" --arg u "$CDP_URL" --argjson t "$(target_json)" \
+      '{action:"cdpEval", expression:$e, awaitPromise:true} + $t + if $u != "" then {url:$u} else {} end')") || exit 1
+    # cdpEval wraps the return in {value:...}; surface the probe object itself,
+    # but never swallow an unexpected shape (a targeting error lives at the top
+    # level and must stay visible).
+    echo "$fpa_out" | jq -r 'if type=="object" and has("value") then .value else . end' 2>/dev/null || echo "$fpa_out"
     ;;
 
   form-fill|ff)

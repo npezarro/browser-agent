@@ -1,5 +1,20 @@
 # progress.md — browser-agent
 
+## 2026-08-03 — v2.12.0 humanized input; the "hardware simulation" ask resolved as a no-op
+- Asked to make hardware simulation convincing enough to avoid blocks. Investigated and
+  concluded **no hardware simulation should be built**: this stack drives a real Chrome on
+  real hardware from a residential IP, so the passive surfaces are genuine and any patch
+  would manufacture the inconsistency that mitigation actually scores.
+- Shipped the change that the evidence supported instead: humanized *input* kinematics
+  (`extension/human-input.js`) and a read-only `fingerprint-audit` that reports
+  incoherence rather than hiding it.
+- Found and fixed a real correctness bug along the way: `cdp-type` emitted DOM `code`
+  values no keyboard produces (`"Key1"`, `"Key "`, `"Key."`) and the wrong `keyCode` for
+  lowercase letters. Any page keying off `event.code` had been receiving impossible events
+  since CDP typing was introduced.
+- 23 new unit tests; 240 tests pass repo-wide; lint clean (the 3 remaining `no-empty`
+  errors pre-date this change, verified by linting the base commit).
+
 ## 2026-07-30 — `see` wrote an unreadable `.img` extension (fix rode along in `793bfad`)
 - `browser-cli see` captured to `/tmp/see-<ts>-<pid>.img`. The vision step hands that path
   to `claude -p --allowedTools Read`, and `.img` is not a recognized image extension, so

@@ -1,6 +1,36 @@
 # context.md — browser-agent
 
-Last Updated: 2026-08-01 — fail-closed tab targeting, remote reload, ext-reload now lock-serialized
+Last Updated: 2026-08-03 — v2.12.0 humanized input kinematics + fingerprint-audit
+
+## 2026-08-03 — v2.12.0: the hardware is real, so fix the hand (not the fingerprint)
+- **Framing that drove the design:** asked how to make hardware "convincing" enough not to
+  get blocked, the correct answer for THIS stack is that no hardware simulation is wanted.
+  Real Chrome, real GPU, real display, residential IP, logged-in profile: every passive
+  surface is already genuine, and bot mitigation scores *inconsistency*, so patching any of
+  them strictly worsens the picture. `navigator.webdriver` is set by the
+  `--enable-automation` launch switch, which an extension + `chrome.debugger` setup never
+  uses, so it is already false here.
+- **What was actually synthetic was the input**, and it carried two separate problems.
+  1. A real bug: key descriptors were `Key${char.toUpperCase()}` + raw `charCode` for every
+     character, so digits emitted `code:"Key1"`, space `"Key "`, period `"Key."`, lowercase
+     `a` reported keyCode 97 instead of 65, and uppercase never set Shift. Pages reading
+     `event.code`/`event.keyCode` saw impossible events. Fixed in `keyDescriptor()`.
+  2. Mechanical kinematics: fixed 30ms keystroke metronome; clicks teleporting to the
+     sub-pixel centroid (a float no mouse emits) with a **0ms** press-to-release hold.
+- New `extension/human-input.js` (pure, dual-target like `tab-target.js`, 23 unit tests):
+  lognormal keystroke timing with digraph effects, integral scattered landing points,
+  bowed Bezier approach paths with overshoot-and-correct, dwell + hold, and `lastPointer`
+  in `background.js` so the cursor has continuity between clicks.
+- `--fast` opts back into the old path; `--seed N` pins the RNG for byte-identical replay.
+  Long strings scale their mean down to fit an 18s budget rather than blowing the relay's
+  30s timeout.
+- New `browser-cli fingerprint-audit` **diagnoses and never spoofs**; its `patchedNatives`
+  check exists to catch a previous "stealth" patch having created the tell it was hiding.
+  Built on `cdpEval`, so it required **no relay change** and works against any relay.
+- Relay untouched. Only the VM's copy of `extension/manifest.json` needed updating, since
+  `/ext/status` reads it to compute `expectedVersion` for drift detection.
+
+## 2026-08-01 — ext-reload serializes on a cross-session resource lock
 
 ## 2026-08-01 — ext-reload serializes on a cross-session resource lock
 - **Why:** the browser is a SINGLETON. Two sessions reloading at once tear down each

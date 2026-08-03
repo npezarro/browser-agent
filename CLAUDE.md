@@ -165,13 +165,91 @@ A Manifest V3 Chrome extension (`extension/`) that provides the complete browser
 
 The extension uses `chrome.debugger` (Chrome DevTools Protocol) to send **trusted** keyboard and mouse events that bypass `isTrusted` checks on sites like Facebook.
 
-- **`browser-cli cdp-type <selector> <text> [target]`** — Type text via CDP `Input.dispatchKeyEvent` (keyDown/char/keyUp per character). Focuses selector first, clears existing content (Ctrl+A, Backspace), then types character-by-character with 30ms delay. Uses `dispatchKeyEvent` instead of `insertText` because React controlled inputs respond to keyboard events but ignore `insertText`.
-- **`browser-cli cdp-click <selector> [target]`** — Click via CDP `Input.dispatchMouseEvent` at element center coordinates. Sends `mouseMoved` before press/release (required for React event delegation).
+- **`browser-cli cdp-type <selector> <text> [target] [--fast] [--seed N] [--delay MS]`** — Type text via CDP `Input.dispatchKeyEvent` (keyDown/char/keyUp per character). Focuses selector first, clears existing content (Ctrl+A, Backspace), then types character-by-character. Uses `dispatchKeyEvent` instead of `insertText` because React controlled inputs respond to keyboard events but ignore `insertText`. Key descriptors and timing come from `human-input.js` (v2.12.0+, see below).
+- **`browser-cli cdp-click <selector> [target] [--fast] [--seed N]`** — Click via CDP `Input.dispatchMouseEvent`. Sends `mouseMoved` before press/release (required for React event delegation); v2.12.0+ sends a whole approach path rather than one teleport.
 - **`browser-cli cdp-eval <expression> [target]`** — Evaluate JS via CDP `Runtime.evaluate`. Bypasses CSP, enabling DOM inspection on Facebook, Google Photos, and other restrictive sites.
 - **`browser-cli cdp-keys <keys-json> [target]`** — Send special keystrokes (ArrowDown, Enter, Tab, Escape) via CDP `Input.dispatchKeyEvent`.
 - **`browser-cli form-fill <fields-json> [target] [--submit <regex>] [--settle MS] [--wait MS]`** (alias `ff`) — Fill framework-controlled inputs **and** submit inside a single CDP evaluation. Values go in through the native `HTMLInputElement.value` setter plus `input`/`change` events; `--submit` matches a case-insensitive regex against visible button text. Returns `{filled:{selector:length}, missing:[], submitted:bool, url, body}`. Use this for any Vue/React login or checkout form — see the atomicity rule below.
 
 `[target]` is either a **relay tab id** (from `tabs` / `ensure`, shaped `<epoch_ms>-<rand>`) or a **URL substring**. `split_target` in `browser-cli.sh` classifies it; omitting it uses `$BROWSER_AGENT_TAB`, and omitting that too uses the active tab. Same argument for `screenshot`, `network-capture`, and `extract-virtual`.
+
+## v2.12.0 ext: Humanized Input Kinematics + `fingerprint-audit` (2026-08-03)
+
+**Do not simulate hardware. The hardware is real; simulate the hand.**
+
+This agent drives a real Chrome, on a real Windows GPU, on a real display, from a
+residential IP, in a logged-in profile. Every *passive* fingerprint surface
+(WebGL vendor/renderer, canvas and audio hashes, screen metrics,
+`hardwareConcurrency`, `deviceMemory`, fonts) is therefore already genuine.
+Patching any of them cannot improve the picture and reliably makes it worse:
+bot mitigation scores *internal inconsistency*, so a spoofed GPU string sitting
+next to an unspoofed canvas hash is far louder than the truth. `navigator.webdriver`
+is likewise a non-issue here, because it is set by Chrome's `--enable-automation`
+launch switch, which an extension + `chrome.debugger` setup never uses.
+See also `pattern_datacenter_ip_blocked_use_local_relay`: a 403 from the VM and a
+200 from WSL is IP reputation, not fingerprinting, and fingerprint-patching is
+the wrong fix for it.
+
+What *was* synthetic is the **input**, and that is what v2.12.0 changes.
+
+**`extension/human-input.js`** — pure, dual-target (importScripts'd by the worker,
+`require`'d by `node --test`), same arrangement as `tab-target.js`. Unit tests in
+`test/human-input.test.js`.
+
+Two classes of fix:
+
+1. **Key descriptors were malformed (a plain bug, independent of detection).**
+   The old inline code used `code: \`Key${char.toUpperCase()}\`` and
+   `windowsVirtualKeyCode: char.charCodeAt(0)` for *every* character. So a digit
+   emitted `code:"Key1"`, a space emitted `"Key "`, a period emitted `"Key."` —
+   none of which are real DOM code values — and a lowercase `a` reported keyCode
+   97 where a real keyboard reports 65. Uppercase never set the Shift modifier.
+   Any page reading `event.code`/`event.keyCode` (shortcut handlers, code-entry
+   inputs, games) saw events no keyboard can produce. `keyDescriptor()` now
+   returns real US-layout values, including the unshifted physical key for
+   shifted characters (`@` → `Digit2` + Shift), and returns `null` for characters
+   with no US physical key (accented, CJK, emoji) so the caller emits only the
+   text-bearing `char` event instead of inventing `"Key漢"`.
+
+2. **Timing and trajectory were mechanical.**
+   - Keystrokes fired on a fixed 30ms metronome. Now drawn from a **lognormal**
+     (right-skewed, like real inter-key intervals) with digraph effects: slower
+     after a space, slower still after clause punctuation, faster on a repeat,
+     plus occasional hesitations. `--delay` is now the *mean*, not a constant.
+   - Clicks teleported to `r.x + r.width/2` — the sub-pixel centroid, a float CDP
+     accepts but no mouse emits (the OS delivers integer device pixels) — with a
+     single `mouseMoved`, a fixed 50ms, then press and release awaited back to
+     back, i.e. a **0ms button hold**. Now: an integral landing point scattered
+     inside the element, a cubic-Bezier approach path bowed off-axis (a straight
+     interpolation is the loudest mouse signal there is) with overshoot-and-
+     correct on long throws, decelerating step delays, a hover dwell, and a real
+     press-to-release hold.
+   - `lastPointer` (in `background.js`, keyed by Chrome tab id, cleared on
+     `tabs.onRemoved`) gives the cursor **continuity between clicks**. Without it
+     every click starts from the same nowhere, which is detectable across a
+     session even when each individual path looks fine.
+
+**Opting out:** `--fast` (`humanize:false`) restores the old teleport/metronome
+path. Corrected key descriptors apply either way. Use it when the page does no
+behavioural scoring and latency matters. `--seed N` pins the RNG so a failing
+interaction replays byte-identically.
+
+**Timeout safety:** humanized typing at a 105ms mean would blow the relay's 30s
+command timeout somewhere past ~280 characters. `keystrokeDelays` scales the mean
+down to fit a `budgetMs` (default 18s) rather than letting the call fail.
+
+**`browser-cli fingerprint-audit [target]`** (alias `fpa`) — read-only probe
+reporting what this browser actually looks like: `webdriver`, UA vs UA-CH
+agreement, screen/window/viewport coherence, WebGL renderer (flags software
+rasterisers), the `Notification.permission` vs `permissions.query` mismatch,
+timezone, and `patchedNatives`. It returns a `flags` array naming each
+inconsistency found. It **diagnoses and never spoofs** — and `patchedNatives`
+exists specifically to catch a previous well-meaning "stealth" patch having
+introduced the very tell it was meant to hide. Implemented as a canned `cdpEval`,
+so **it needs no relay-side change** and works against any deployed relay.
+
+Note `cdpConsoleProbe`: it necessarily runs *with* `chrome.debugger` attached, so
+a `true` there describes the CDP command window only, not idle browsing.
 
 ## Tab Targeting Is Fail-Closed (v2.9.0 ext)
 
