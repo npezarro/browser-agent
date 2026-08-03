@@ -202,6 +202,22 @@ Net effect: any `cdp-eval`/`cdp-click` could read or click a credential page the
 - **Never use `requestAnimationFrame` in CDP scroll sequences.** rAF promises never resolve on unfocused or un-painted tabs, causing the entire cdpEval to hang until the safety timer fires. Use `setTimeout` delays between scroll steps instead.
 - **Debugger leak on timeout:** When using `--focus` or `--scroll` with cdpEval, the debugger lifecycle is managed manually (not via `withDebugger` helper) with a 55s safety timer that guarantees `chrome.debugger.detach` even if the server-side timeout fires first. This prevents "Another debugger is already attached" errors.
 
+## v2.11.0 ext: Origin Containment, Durable Tab Registry, close/focus Fail-Closed (2026-08-02)
+
+Hardening required before any **unattended** job (overnight/cron-driven browser-agent use) drives this extension. Five findings from commit `8b40b5d`, in descending order of how badly each would bite an unattended run:
+
+1. **The tab registry did not survive the MV3 service worker.** `internalToChrome` was a module-level `Map`, and Chrome kills idle service workers after ~30s. Only a content-script `ba-register-tab` repopulated it — on a throttled (minimized/display-off) browser the content script never re-registers, so the registry silently stays empty while the relay keeps listing the tab as healthy for its own 120s TTL. Fix: mirrored into `chrome.storage.session`, which survives worker restarts and clears on browser exit.
+2. **No origin containment existed.** The v2.9.0 fail-closed resolver (above) stops a *stale* target from landing somewhere unnamed, but does nothing about a *correctly-resolved* one. Added a hard-deny list (identity/bank/credential hosts, matched by host or dot-suffix so `notchase.com` can't match `chase.com`) plus a per-command `allowOrigins`. Hard-deny outranks `allowOrigins` — a job cannot allowlist its way onto a credential page, even when the tab is named by `chromeTabId`. `unsafeAllowSensitive` is the logged escape hatch for existing OAuth skills. Absent `allowOrigins`, behavior is byte-identical to v2.10.2.
+3. **`cmdCloseTab`/`cmdFocusTab` bypassed `resolveTarget` entirely.** `close` did `chrome.tabs.query({url: cmd.url + "*"})` and took `tabs[0]` — a shared URL prefix closed whichever tab Chrome listed first, and an explicit `tabId` was ignored outright. A nightly job closing its own tab could close the operator's. Both now route through the same fail-closed resolver as every other command.
+4. **`expectUrl` silently disabled itself in exactly the overnight condition.** The relay sourced it only from `agentTabs` (populated by content-script traffic, pruned at 120s); display off → pruned → no `expectUrl` → `originMismatch()` returns `null` → the guard is a no-op. The heartbeat now also carries the extension's own tab table (query strings stripped), which the relay prefers, because the service worker is alive whenever the browser is.
+5. **`chromeTabId` was unreachable.** `resolveTargetCore` accepts and fail-closes on it, and `openTab`/`queryTabs` return it, but neither the CLI nor the relay ever forwarded one — every unattended command was forced onto the weaker relay tab id. Now plumbed end to end; had to ship with the manifest change (`exclude_matches` removes the content script from credential/chain-hotel domains, so no relay tab id is ever minted there and `chromeTabId` is the only usable primitive).
+
+Also: `attachLock` (concurrent `cdp-*` calls raced to "Another debugger is already attached"), and `manifest.json` `exclude_matches` for credential origins + the four hotel chains (removes 3 of 4 bot fingerprints — cross-origin beacon, console monkey-patch, sessionStorage key — from sites that scan for them).
+
+**New `browser-cli health`:** a four-state probe (background / worker-exec / content-script / cdp+targeting) → `green` | `cdp-only` | `red`. `cdp-only` is the **expected** overnight state, not an anomaly — its step 4 is the standing anti-regression gate for the wrong-tab bug from v2.9.0. Its probe origin derives from the configured relay URL, not hardcoded.
+
+**Test change, deliberate:** "active tab is used only when no target is named at all" now asserts against `myaccount.google.com`, which the hard-deny refuses — the refusal is the point.
+
 ## Virtual Rendering (v2.4.0+)
 
 SPAs that use IntersectionObserver-based lazy rendering (e.g., Amex Travel) require the tab to be focused and scrolled before content appears in the DOM.
