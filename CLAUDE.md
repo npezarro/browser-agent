@@ -155,7 +155,8 @@ A Manifest V3 Chrome extension (`extension/`) that provides the complete browser
 
 **CLI commands**:
 - `browser-cli open --bg <url>` — Open tab in background
-- `browser-cli focus <url>` — Focus existing tab by URL
+- `browser-cli focus <target>` — Focus a tab by chrome tab id, relay tab id, or URL substring (routes through `split_target`/`target_json` as of 2026-08-02; was URL-only before)
+- `browser-cli close <target>` — Close a tab by chrome tab id, relay tab id, or URL substring (same targeting, same fix date). Always close by target after a chain/loop iteration — an unresolved target here fails silently and leaks the tab.
 - `browser-cli ext-status` — Check extension connection status
 
 **Install**: Load `extension/` as unpacked extension in Chrome, configure API URL and key in popup.
