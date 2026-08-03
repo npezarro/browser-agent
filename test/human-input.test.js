@@ -159,7 +159,19 @@ test("mousePath: ends exactly on the target and every point is integral", () => 
     const last = pts[pts.length - 1];
     assert.deepStrictEqual(last, { x: to.x, y: to.y }, "press must land on the aimed point");
     assert.ok(pts.every((p) => Number.isInteger(p.x) && Number.isInteger(p.y)));
-    assert.ok(pts.length >= 6, `expected an approach path, got ${pts.length} points`);
+    assert.ok(pts.length >= 5, `expected an approach path, got ${pts.length} points`);
+  }
+});
+
+test("mousePath: waypoint count stays small enough to survive the relay timeout", () => {
+  // Each waypoint is a chrome.debugger round trip costing ~1s against this
+  // relay. A 26-point path pushed a single click past the 30s command timeout
+  // and left the debugger attached until the 55s safety timer. Cap is 14 plus
+  // at most 2 appended correction points.
+  const rng = makeRng(23);
+  for (const to of [{ x: 60, y: 20 }, { x: 1600, y: 1200 }, { x: 4000, y: 3000 }]) {
+    const pts = mousePath({ x: 0, y: 0 }, to, rng);
+    assert.ok(pts.length <= 16, `${pts.length} waypoints is too many for the transport`);
   }
 });
 
