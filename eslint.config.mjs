@@ -57,14 +57,23 @@ export default [
         isSensitiveOrigin: "readonly",
         allowlistViolation: "readonly",
         originOf: "readonly",
+        // From human-input.js via importScripts (humanized input, 2.12.0).
+        makeRng: "readonly",
+        keyDescriptor: "readonly",
+        keystrokeDelays: "readonly",
+        pointInRect: "readonly",
+        mousePath: "readonly",
+        moveDelays: "readonly",
+        clickTiming: "readonly",
+        idlePointer: "readonly",
       },
     },
   },
 
-  // tab-target.js is dual-target: importScripts'd by the service worker and
-  // require'd by `node --test`, so it guards a CommonJS export.
+  // tab-target.js and human-input.js are dual-target: importScripts'd by the
+  // service worker and require'd by `node --test`, so they guard a CJS export.
   {
-    files: ["extension/tab-target.js"],
+    files: ["extension/tab-target.js", "extension/human-input.js"],
     languageOptions: {
       globals: { module: "readonly" },
     },

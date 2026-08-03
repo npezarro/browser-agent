@@ -2,7 +2,17 @@
 // Polls relay server for tab-management commands, executes via chrome.tabs API
 
 // Pure tab-target resolution, shared with `node --test` (see tab-target.js).
-importScripts("tab-target.js");
+// Human input kinematics, same dual-load arrangement (see human-input.js).
+importScripts("tab-target.js", "human-input.js");
+
+// Where the synthetic cursor was left in each tab, keyed by Chrome tab id.
+// A real pointer has continuity between interactions: it is wherever the last
+// click left it, and the next click travels from there. Without this, every
+// click began from the same nowhere, which is a trivially detectable pattern
+// across a session even when each individual path looks plausible.
+// Deliberately NOT persisted to storage.session: a cursor position is only
+// meaningful within one run of a page, and a stale one would teleport.
+const lastPointer = new Map();
 
 const POLL_MS = 2000;
 const HEARTBEAT_MS = 10000;
@@ -570,7 +580,20 @@ function cdp(target, method, params = {}) {
  * Type text into the focused element using CDP Input.dispatchKeyEvent.
  * These are trusted events — React/FB will process them like real user input.
  *
- * cmd: { url?, chromeTabId?, text, selector?, delay? }
+ * Key descriptors and inter-key timing come from human-input.js. Two things
+ * changed there and both matter outside of any detection concern:
+ *   - `event.code` / `event.keyCode` are now the values a real US keyboard
+ *     reports. The old inline `Key${char.toUpperCase()}` emitted "Digit"-less
+ *     nonsense like "Key1", "Key " and "Key." and reported charCode 97 for a
+ *     lowercase "a" where a keyboard reports 65, so any page keying off those
+ *     (shortcut handlers, code inputs, games) saw impossible events.
+ *   - the interval is drawn from a lognormal instead of being a fixed 30ms.
+ *
+ * cmd: { url?, chromeTabId?, text, selector?, delay?, humanize?, seed?, budgetMs? }
+ *   delay:    MEAN inter-key interval in ms (default 105), not a constant.
+ *   humanize: false restores the old fixed-interval path for speed-critical or
+ *             byte-exact callers. Descriptors stay correct either way.
+ *   seed:     pin for reproducible replay of a failing interaction.
  */
 async function cmdCdpType(cmd) {
   const tgt = await resolveTarget(cmd);
@@ -625,36 +648,45 @@ async function cmdCdpType(cmd) {
     // Type each character using dispatchKeyEvent (not insertText).
     // dispatchKeyEvent generates real keyboard events that React's
     // controlled inputs respond to. insertText bypasses React state.
-    const delay = cmd.delay || 30;
-    for (const char of cmd.text) {
-      const keyCode = char.charCodeAt(0);
-      // keyDown without text — text only in char event to avoid double insertion
-      await cdp(target, "Input.dispatchKeyEvent", {
-        type: "keyDown",
-        key: char,
-        code: `Key${char.toUpperCase()}`,
-        windowsVirtualKeyCode: keyCode,
-        nativeVirtualKeyCode: keyCode,
-      });
-      await cdp(target, "Input.dispatchKeyEvent", {
-        type: "char",
-        text: char,
-        key: char,
-        code: `Key${char.toUpperCase()}`,
-        windowsVirtualKeyCode: keyCode,
-        nativeVirtualKeyCode: keyCode,
-      });
-      await cdp(target, "Input.dispatchKeyEvent", {
-        type: "keyUp",
-        key: char,
-        code: `Key${char.toUpperCase()}`,
-        windowsVirtualKeyCode: keyCode,
-        nativeVirtualKeyCode: keyCode,
-      });
-      await new Promise((r) => setTimeout(r, delay));
+    const humanize = cmd.humanize !== false;
+    const rng = makeRng(cmd.seed || Date.now());
+    const delays = humanize
+      ? keystrokeDelays(cmd.text, { rng, meanMs: cmd.delay || 105, budgetMs: cmd.budgetMs })
+      : new Array(cmd.text.length).fill(cmd.delay || 30);
+
+    for (let i = 0; i < cmd.text.length; i++) {
+      const char = cmd.text[i];
+      const d = keyDescriptor(char);
+
+      if (d) {
+        const base = {
+          key: d.key,
+          code: d.code,
+          windowsVirtualKeyCode: d.windowsVirtualKeyCode,
+          nativeVirtualKeyCode: d.windowsVirtualKeyCode,
+          modifiers: d.modifiers,
+        };
+        // keyDown without text — text only in char event to avoid double insertion
+        await cdp(target, "Input.dispatchKeyEvent", { type: "keyDown", ...base });
+        await cdp(target, "Input.dispatchKeyEvent", { type: "char", text: char, ...base });
+        await cdp(target, "Input.dispatchKeyEvent", { type: "keyUp", ...base });
+      } else {
+        // No US-layout physical key produces this character (accented, CJK,
+        // emoji). Emit the text-bearing event only; inventing a `code` here is
+        // what produced "Key漢" before.
+        await cdp(target, "Input.dispatchKeyEvent", { type: "char", text: char, key: char });
+      }
+
+      await new Promise((r) => setTimeout(r, delays[i]));
     }
 
-    return { typed: true, length: cmd.text.length, method: "cdp-keyevent", targetUrl: tgt.targetUrl, resolvedBy: tgt.resolvedBy };
+    return {
+      typed: true,
+      length: cmd.text.length,
+      method: humanize ? "cdp-keyevent-humanized" : "cdp-keyevent",
+      targetUrl: tgt.targetUrl,
+      resolvedBy: tgt.resolvedBy,
+    };
   }, cmd.expectUrl, opt(cmd));
 }
 
@@ -662,7 +694,17 @@ async function cmdCdpType(cmd) {
  * Click at an element's position using CDP Input.dispatchMouseEvent.
  * Trusted click — bypasses isTrusted checks.
  *
- * cmd: { url?, chromeTabId?, selector, x?, y? }
+ * The click is given the kinematics a hand produces (see human-input.js): an
+ * approach path that bows off-axis from wherever the cursor was last left in
+ * this tab, an integral landing point scattered inside the element rather than
+ * its sub-pixel centroid, a hover dwell before the button goes down, and a
+ * non-zero hold between press and release. Previously this was one mouseMoved
+ * teleport to `r.x + r.width/2` (a float CDP accepts but no mouse emits),
+ * a fixed 50ms, then press and release awaited back to back, i.e. a 0ms hold.
+ *
+ * cmd: { url?, chromeTabId?, selector, x?, y?, humanize?, seed? }
+ *   humanize: false restores the old direct path (fast, deterministic).
+ *   x/y:      explicit viewport coordinates, still approached and dwelled on.
  */
 async function cmdCdpClick(cmd) {
   const tgt = await resolveTarget(cmd);
@@ -670,46 +712,84 @@ async function cmdCdpClick(cmd) {
   const tabId = tgt.tabId;
 
   return withDebugger(tabId, async (target) => {
-    // Get element position
+    // Get the element's full rect (not just its centre) plus the viewport, so
+    // the landing point can be scattered inside the target and an unknown
+    // cursor can start from a plausible resting position.
     const evalResult = await cdp(target, "Runtime.evaluate", {
       expression: `(() => {
         const el = document.querySelector(${JSON.stringify(cmd.selector)});
         if (!el) return JSON.stringify({error: 'not found'});
         const r = el.getBoundingClientRect();
-        return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
+        return JSON.stringify({
+          x: r.x, y: r.y, width: r.width, height: r.height,
+          vw: window.innerWidth, vh: window.innerHeight,
+        });
       })()`,
       returnByValue: true,
     });
 
-    const pos = JSON.parse(evalResult.result.value);
-    if (pos.error) return { clicked: false, error: pos.error };
+    const rect = JSON.parse(evalResult.result.value);
+    if (rect.error) return { clicked: false, error: rect.error };
 
-    const x = cmd.x || pos.x;
-    const y = cmd.y || pos.y;
+    const humanize = cmd.humanize !== false;
+    const rng = makeRng(cmd.seed || Date.now());
+    const viewport = { width: rect.vw, height: rect.vh };
 
-    // mouseMoved first — React event delegation needs this
-    await cdp(target, "Input.dispatchMouseEvent", {
-      type: "mouseMoved",
-      x,
-      y,
-    });
-    await new Promise((r) => setTimeout(r, 50));
-    await cdp(target, "Input.dispatchMouseEvent", {
-      type: "mousePressed",
-      x,
-      y,
-      button: "left",
-      clickCount: 1,
-    });
-    await cdp(target, "Input.dispatchMouseEvent", {
-      type: "mouseReleased",
-      x,
-      y,
-      button: "left",
-      clickCount: 1,
-    });
+    let to;
+    if (cmd.x != null && cmd.y != null) {
+      to = { x: Math.round(cmd.x), y: Math.round(cmd.y) };
+    } else if (humanize) {
+      to = pointInRect(rect, rng);
+    } else {
+      to = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    }
 
-    return { clicked: true, x, y, method: "cdp", targetUrl: tgt.targetUrl, resolvedBy: tgt.resolvedBy };
+    let pathLen = 1;
+    if (humanize) {
+      const from = lastPointer.get(tabId) || idlePointer(viewport, rng);
+      const pts = mousePath(from, to, rng);
+      const waits = moveDelays(pts.length, rng);
+      for (let i = 0; i < pts.length; i++) {
+        await cdp(target, "Input.dispatchMouseEvent", {
+          type: "mouseMoved", x: pts[i].x, y: pts[i].y, buttons: 0,
+        });
+        await new Promise((r) => setTimeout(r, waits[i]));
+      }
+      pathLen = pts.length;
+
+      const { settleMs, holdMs } = clickTiming(rng);
+      await new Promise((r) => setTimeout(r, settleMs));
+      await cdp(target, "Input.dispatchMouseEvent", {
+        type: "mousePressed", x: to.x, y: to.y, button: "left", buttons: 1, clickCount: 1,
+      });
+      await new Promise((r) => setTimeout(r, holdMs));
+      await cdp(target, "Input.dispatchMouseEvent", {
+        type: "mouseReleased", x: to.x, y: to.y, button: "left", buttons: 0, clickCount: 1,
+      });
+    } else {
+      // mouseMoved first — React event delegation needs this
+      await cdp(target, "Input.dispatchMouseEvent", { type: "mouseMoved", x: to.x, y: to.y });
+      await new Promise((r) => setTimeout(r, 50));
+      await cdp(target, "Input.dispatchMouseEvent", {
+        type: "mousePressed", x: to.x, y: to.y, button: "left", clickCount: 1,
+      });
+      await cdp(target, "Input.dispatchMouseEvent", {
+        type: "mouseReleased", x: to.x, y: to.y, button: "left", clickCount: 1,
+      });
+    }
+
+    // Remember where the cursor ended up so the next click starts from here.
+    lastPointer.set(tabId, { x: to.x, y: to.y });
+
+    return {
+      clicked: true,
+      x: to.x,
+      y: to.y,
+      method: humanize ? "cdp-humanized" : "cdp",
+      pathPoints: pathLen,
+      targetUrl: tgt.targetUrl,
+      resolvedBy: tgt.resolvedBy,
+    };
   }, cmd.expectUrl, opt(cmd));
 }
 
@@ -1253,6 +1333,9 @@ chrome.tabs.onRemoved.addListener((closedId) => {
     if (chromeId === closedId) { internalToChrome.delete(internalId); changed = true; }
   }
   if (changed) persistRegistry();
+  // Same reasoning for the cursor: Chrome recycles tab ids, and inheriting a
+  // dead tab's pointer position would start the next path from a stale point.
+  lastPointer.delete(closedId);
 });
 
 // Keepalive alarm for MV3 service worker
