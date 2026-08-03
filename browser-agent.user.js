@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Browser Agent (Generic)
 // @namespace    https://pezant.ca
-// @version      1.16.0
+// @version      1.17.0
 // @description  Generic remote browser agent. Polls server for commands, executes them, reports results. Works on all pages.
 // @author       npezarro
 // @match        *://*/*
@@ -24,12 +24,28 @@
   // Skip iframes — only run in top-level windows
   if (window.self !== window.top) return;
 
-  const VERSION = "1.16.0";
+  const VERSION = "1.17.0";
   const API_BASE = "https://pezant.ca/api/browser-agent";
   const API = API_BASE + "/agent";
   const AGENT_SECRET = GM_getValue("agentSecret", "");
   const POLL_MS = 3000;
   const USER_IDLE_MS = 5000; // Resume polling after 5s of no user activity
+
+  // ── Idle backoff ──
+  // A tab left open (or abandoned mid-OAuth) otherwise polls every 3s forever:
+  // 28,800 requests/day/tab, all of them empty. After IDLE_BACKOFF_AFTER
+  // consecutive empty polls we stretch the interval up to POLL_MAX_MS. Any
+  // command, navigation, or user activity resets it to POLL_MS immediately, so
+  // an in-use tab is never slower to respond than before.
+  const POLL_MAX_MS = 30000;
+  const IDLE_BACKOFF_AFTER = 20; // ~1 min of silence before we start stretching
+  let idleRounds = 0;
+
+  function currentPollMs() {
+    if (idleRounds < IDLE_BACKOFF_AFTER) return POLL_MS;
+    const stretched = POLL_MS * Math.pow(2, Math.min(4, Math.floor((idleRounds - IDLE_BACKOFF_AFTER) / 20) + 1));
+    return Math.min(POLL_MAX_MS, stretched);
+  }
 
   // ── User activity detection — pause polling during active browser use ──
   let lastUserActivity = 0; // timestamp of last mouse/keyboard/scroll event
@@ -657,19 +673,31 @@
 
   let polling = false;
 
+  // The server keeps the last-known URL per tab (agentTabs[tid].url), refreshed by
+  // /heartbeat on every navigation. Re-sending the full href on every 3s poll is
+  // therefore redundant — and because Apache logs the whole query string, a long
+  // URL turns each poll into a ~1.5KB log line (~43MB/day/tab). Send it only when
+  // it has actually changed, and only confirm once the server has accepted it.
+  let lastSentUrl = null;
+
   function poll() {
     if (polling) return;
     polling = true;
 
+    const href = window.location.href;
+    const urlChanged = href !== lastSentUrl;
+
     GM_xmlhttpRequest({
       method: "GET",
-      url: `${API}/commands?tabId=${tabId}&url=${encodeURIComponent(window.location.href)}`,
+      url: `${API}/commands?tabId=${tabId}${urlChanged ? `&url=${encodeURIComponent(href)}` : ""}`,
       headers: agentHeaders(),
       onload: async (resp) => {
         if (resp.status !== 200) { polling = false; return; }
+        if (urlChanged) lastSentUrl = href;
         try {
           const data = JSON.parse(resp.responseText);
-          if (!data.commands || data.commands.length === 0) return;
+          if (!data.commands || data.commands.length === 0) { idleRounds++; return; }
+          idleRounds = 0;
 
           for (const cmd of data.commands) {
             // If user is actively interacting, wait until they stop before executing
@@ -740,17 +768,19 @@
       lastUrl = window.location.href;
       log(`Navigate: ${lastUrl.substring(0, 120)}`);
       post("/heartbeat", getPageStateLite());
+      idleRounds = 0; // a navigation means this tab is alive — poll eagerly again
     }
 
     if (isUserActive()) {
       // User is actively interacting — skip polling entirely, check back in 2s
+      idleRounds = 0;
       setTimeout(tick, 2000);
       return;
     }
 
     // User is idle or window unfocused — poll normally
     poll();
-    setTimeout(tick, POLL_MS);
+    setTimeout(tick, currentPollMs());
   }
 
   // Start the poll loop

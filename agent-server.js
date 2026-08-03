@@ -435,9 +435,12 @@ function createApp(opts = {}) {
     if (req.method === "GET" && path === "/agent/commands") {
       if (!checkAgentAuth(req)) return json(res, { error: "Unauthorized" }, 401);
       const tid = parsed?.searchParams?.get("tabId") || "default";
+      // Clients >= 1.17.0 only send `url` when it changed since the last accepted
+      // poll, so an absent param means "unchanged" — never "blank". Overwriting
+      // with "" here would erase the URL that tab targeting (expectUrl) relies on.
       const url = parsed?.searchParams?.get("url") || "";
       if (agentTabs[tid]) {
-        agentTabs[tid].url = url;
+        if (url) agentTabs[tid].url = url;
         agentTabs[tid].receivedAt = Date.now();
       }
       const cmds = [...(agentCommands[tid] || []), ...(agentCommands["all"] || [])];
