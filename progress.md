@@ -14,6 +14,25 @@
   since CDP typing was introduced.
 - 23 new unit tests; 240 tests pass repo-wide; lint clean (the 3 remaining `no-empty`
   errors pre-date this change, verified by linting the base commit).
+- `c349d42` merge (2.12.0), `caefe16` fix, `e48b2ef` merge (2.12.1). 241 tests pass.
+
+### Live verification caught a regression that review did not (`caefe16`, ext 2.12.1)
+- Deployed 2.12.0, then exercised it against a real page. `cdp-click` returned
+  **"Timeout waiting for extension response"** even though the click itself had landed
+  correctly (inside the button, off-centroid, `holdMs:61`, `isTrusted:true`).
+- Cause: each `chrome.debugger` Input dispatch costs ~1s+ here — a bare `--fast` click
+  (3 CDP calls) takes ~6.7s end to end — so a 26-waypoint path blew the relay's 30s command
+  timeout. `withDebugger` then held the debugger until its 55s safety timer, so the NEXT
+  command failed "Another debugger is already attached".
+- Fixed by capping waypoints to `clamp(dist/60, 5, 14)`, sleeping only the remainder of the
+  intended gap after the RPC's own cost, and adding a 6s `moveBudgetMs` deadline that reports
+  `pathTruncated: true` instead of truncating silently.
+- Re-verified after the fix: visible tab, 2.3s, 5-point path, no truncation, correct landing.
+- Deploy verified all three tiers on `2.12.1`: WSL, VM relay (health 200), Windows checkout,
+  and `ext-status` reporting `stale: false`.
+- Two traps recorded in `context.md`: hidden tabs silently swallow CDP input (and slow each
+  dispatch to seconds), and a relay restart wipes its heartbeat table so an immediate
+  `ext-reload` fails "No browser tabs connected".
 
 ## 2026-07-30 — `see` wrote an unreadable `.img` extension (fix rode along in `793bfad`)
 - `browser-cli see` captured to `/tmp/see-<ts>-<pid>.img`. The vision step hands that path

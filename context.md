@@ -1,6 +1,45 @@
 # context.md — browser-agent
 
-Last Updated: 2026-08-03 — v2.12.0 humanized input kinematics + fingerprint-audit
+Last Updated: 2026-08-03 — v2.12.1 humanized input kinematics + fingerprint-audit (LIVE, verified)
+
+## 2026-08-03 — v2.12.1: the approach path must respect the transport
+- **Caught in live verification, not review.** Each `chrome.debugger` Input dispatch costs
+  ~1s+ against this relay (a bare 3-call `--fast` click takes ~6.7s end to end). The 2.12.0
+  click used up to 26 awaited waypoints, which pushed a single click past the relay's **30s
+  command timeout**.
+- That failure is worse than slow: `withDebugger` then holds the debugger attached until its
+  **55s safety timer**, so the *next* command dies with "Another debugger is already
+  attached". One slow click poisons its successor.
+- Fix: waypoints `clamp(dist/60, 5, 14)`; the inter-move gap is now a *remainder*
+  (`waits[i]` minus the time the RPC already took, usually zero); a `moveBudgetMs` deadline
+  (default 6s) abandons the rest of the path and jumps to the final point so the press still
+  lands where aimed, reporting `pathTruncated: true` rather than truncating silently.
+- **Rule this generalises to:** measure the transport before synthesising timing. Delays that
+  assume a free channel BECOME the timeout when the channel costs more than the delay does.
+
+### Live verification results (2026-08-03, ext 2.12.1 on the main profile)
+- `ext-status`: `version 2.12.1 == expectedVersion`, `stale: false`, `connected: true`.
+- Key descriptors on a real page: `H`→`KeyH` kc72 **SHIFT**, `@`→`Digit2` kc50 SHIFT,
+  `.`→`Period` kc190, ` `→`Space` kc32. Value typed correctly (`Hi a@b.co 42!`).
+- Keystroke intervals: `[139,90,126,109,168,77,139,186,166,114,217,108]` (was a flat 30).
+- Click on a **visible** tab: 2.3s, 5-point decelerating path, landed 258,175 inside the
+  button rect (205..321 x 139..212) and NOT its centroid (263,176), `holdMs: 61`,
+  `isTrusted: true`, no truncation. Path started at the previous click's endpoint, proving
+  `lastPointer` continuity.
+- `fingerprint-audit` on this browser: `webdriver:false`, WebGL `ANGLE (NVIDIA GeForce GTX
+  1060 6GB, D3D11)`, UA and UA-CH agree, `patchedNatives: []`, `cdpConsoleProbe: false`,
+  `flags: []`. Empirical confirmation that the passive surfaces need no work.
+
+### Two operational traps this session hit
+- **`document.visibilityState` gates input, silently.** On a hidden/occluded tab, CDP mouse
+  presses and keystrokes **do not land at all** while the command still reports success, and
+  each Input dispatch slows from ~30ms to seconds. Always confirm `visible` before trusting a
+  negative interaction result. Raising the Chrome window from WSL works:
+  PowerShell `ShowWindow(hwnd, 9)` + `SetForegroundWindow`.
+- **Restarting the relay wipes its in-memory `extLastHeartbeatByKey`,** so an `ext-reload`
+  issued immediately after `pm2 restart browser-agent` sees `extAlive:false`, falls through to
+  the content-script path, and fails "No browser tabs connected". Wait for a heartbeat
+  (`until ext-status | grep connected: true`) before reloading.
 
 ## 2026-08-03 — v2.12.0: the hardware is real, so fix the hand (not the fingerprint)
 - **Framing that drove the design:** asked how to make hardware "convincing" enough not to
