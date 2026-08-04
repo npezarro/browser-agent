@@ -1,6 +1,45 @@
 # context.md — browser-agent
 
-Last Updated: 2026-08-03 — v2.12.1 humanized input kinematics + fingerprint-audit (LIVE, verified)
+Last Updated: 2026-08-03 — v2.12.1 LIVE + validated against real bot protection (null result)
+
+## 2026-08-03 (phase 2) — validated against real bot protection: the instrument saturated
+- **Passive control passed outright.** `bot.sannysoft.com`: zero failed checks.
+  `WebDriver (New): missing (passed)`, `WebDriver Advanced: passed`, `Chrome: present (passed)`,
+  plugins 5, real `ANGLE (NVIDIA ... D3D11)` renderer; a programmatic sweep for failing/red cells
+  returned empty. Independent confirmation of the v2.12.0 thesis that the passive surfaces are
+  already clean and need no spoofing.
+- **The behavioural A/B produced no signal, because the instrument has no resolution here.**
+  Google's reCAPTCHA v3 score demo returned **0.9 (its practical ceiling) in every condition**:
+  baseline with zero interaction, after `--fast` clicks, and after humanized clicks, interleaved
+  to control for session-reputation drift.
+
+  | arm | clicks | elapsed | score |
+  |---|---|---|---|
+  | baseline, no interaction | - | - | 0.9 |
+  | round 1 `--fast` | 3/3 | 6s | 0.9 |
+  | round 1 humanized | 3/3 | 6s | 0.9 |
+  | round 2 `--fast` | 3/3 | 6s | 0.9 |
+
+  Correct reading: **wrong measuring device.** Not "humanizing is pointless" and not "humanizing
+  is proven". Humanized input remains UNPROVEN against a detector that actually scores behaviour.
+  A useful next instrument must report a graded verdict with reasons rather than a saturated
+  score (fingerprint.com playground, CreepJS trust score, DataDome/PerimeterX demo).
+
+### Two cost facts worth knowing before writing any interaction loop
+- **`cdp-type` is 3 CDP dispatches per character**, humanized or not (keyDown, char, keyUp). A
+  25-character string is 75 round trips and will exceed the relay's 30s timeout on a
+  non-composited tab. `keystrokeDelays` scales the *sleeps* to a budget but cannot reduce the
+  RPC count. Prefer `form-fill` for anything long; reserve `cdp-type` for short fields.
+- **CORRECTION to the earlier "+1.8s per humanized click" note: it was wrong.** Measured on a
+  visible tab, `--fast` and humanized clicks are **both ~2s**. The transport dominates, not the
+  waypoints. The original figure compared a `--fast` click on a composited window against a
+  humanized click on an occluded one, i.e. it measured visibility, not method.
+- Unrelated but cost me 20 minutes: piping a long-running **background** script through `tail`
+  buffers all output until exit, so a healthy run looks hung and killing it loses everything.
+  Write to a log file with `tee` instead.
+
+Full closeout: `privateContext/deliverables/closeouts/2026-08-03-bot-protection-ab-test-and-credential-leak.md`
+
 
 ## 2026-08-03 — v2.12.1: the approach path must respect the transport
 - **Caught in live verification, not review.** Each `chrome.debugger` Input dispatch costs

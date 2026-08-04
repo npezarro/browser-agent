@@ -1,5 +1,24 @@
 # progress.md — browser-agent
 
+## 2026-08-03 (phase 2) — humanized input tested against real bot protection: null result
+- Closed out phase 1's open item ("unproven against a site that scores behaviour") by actually
+  running it. It half-closed: the test ran, the instrument had no resolution.
+- **Control passed:** `bot.sannysoft.com` returned zero failed checks (WebDriver missing/passed,
+  WebDriver Advanced passed, real ANGLE/NVIDIA renderer, plugins 5). Independent confirmation
+  that the passive surfaces are clean, which is the v2.12.0 thesis.
+- **Treatment saturated:** reCAPTCHA v3 returned **0.9 in all four conditions** (no interaction,
+  `--fast`, humanized, `--fast` again; interleaved to control for session drift). 0.9 is its
+  practical ceiling, so there is no headroom to show improvement and `--fast` cost nothing.
+  Reading: wrong measuring device. Humanized input is still UNPROVEN behaviourally.
+- **Correction to a phase 1 claim:** "+1.8s per humanized click" was wrong. Both methods are
+  ~2s on a visible tab; the original number compared a composited `--fast` click against an
+  occluded humanized one, so it measured visibility rather than method.
+- **New cost fact:** `cdp-type` is 3 CDP dispatches per character regardless of method, so a
+  25-char string is 75 round trips. `keystrokeDelays` bounds the sleeps, not the RPC count.
+  Prefer `form-fill` for long inputs.
+- No code changed this phase. Docs only.
+- Full closeout: `privateContext/deliverables/closeouts/2026-08-03-bot-protection-ab-test-and-credential-leak.md`
+
 ## 2026-08-03 — v2.12.0 humanized input; the "hardware simulation" ask resolved as a no-op
 - Asked to make hardware simulation convincing enough to avoid blocks. Investigated and
   concluded **no hardware simulation should be built**: this stack drives a real Chrome on
