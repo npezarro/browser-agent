@@ -711,7 +711,11 @@ function registerTab() {
       { type: "ba-register-tab", tabId },
       () => void chrome.runtime?.lastError
     );
-  } catch {}
+  } catch {
+    // sendMessage throws once the extension context is invalidated (reload or
+    // update). Nothing to recover here -- the fresh content script injected
+    // after the reload re-registers on its own.
+  }
 }
 registerTab();
 

@@ -1045,7 +1045,11 @@ async function cmdExtractVirtual(cmd) {
     const tab = await chrome.tabs.get(tabId);
     await chrome.tabs.update(tabId, { active: true });
     await chrome.windows.update(tab.windowId, { focused: true });
-  } catch (_) {}
+  } catch (_) {
+    // Focus is best-effort: the tab or its window may already be gone. Don't
+    // bail here -- guardTarget() immediately below is the authoritative check
+    // and reports a missing/drifted tab with a real error.
+  }
   await new Promise((r) => setTimeout(r, waitMs));
 
   const drift = await guardTarget(tabId, cmd.expectUrl, opt(cmd));
@@ -1110,7 +1114,11 @@ async function cmdExtractVirtual(cmd) {
         results.approaches.screenshot = "success";
         return results;
       }
-    } catch (_) {}
+    } catch (_) {
+      // extract-virtual tries 10 approaches in sequence; a throw here just
+      // means this one didn't yield. Fall through to the next approach and
+      // record the miss in results.approaches below.
+    }
     results.approaches.screenshot = "no data";
 
     // Approach 4: Scroll each card into view via scrollIntoView
