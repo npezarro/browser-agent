@@ -265,3 +265,23 @@ Full session closeout: privateContext/deliverables/closeouts/2026-07-30-brevo-mc
 ## 2026-08-01 — form-fill (atomic SPA form fill+submit)
 - 88e4ac1 — feat(cli): add form-fill for atomic SPA form fill+submit; documents the
   background-tab cdp-type no-op and the hidden-decoy submit button. CLI-only, no reload.
+
+## 2026-08-05 — poll loop was writing 330MB/day of Apache log
+- The userscript re-sent the full `window.location.href` as a query param on every 3s poll.
+  Apache logs the whole query string, so one tab parked on a long URL wrote ~1.5KB per poll
+  (~43MB/day/tab). Eight abandoned OAuth tabs took `other_vhosts_access.log` to 662MB in two
+  days and pushed the VM to 82% disk.
+- The param was redundant: `/heartbeat` already refreshes `agentTabs[tid].url` on every
+  navigation. Client now sends `url` only when it changed since the last accepted poll, and the
+  server treats an absent param as "unchanged" rather than blank so `expectUrl` tab targeting
+  keeps working.
+- Added idle backoff. A tab abandoned mid-flow polled every 3s forever (28,800 empty
+  requests/day); after ~1min of empty polls the interval stretches toward 30s, and any command,
+  navigation, or user activity snaps it back to 3s.
+- Userscript 1.16.0 -> 1.17.0. 217/217 tests pass. Commit 6109fe1.
+- **Belt-and-braces at the Apache layer** (VM-side, not this repo): browser-agent poll endpoints
+  now log to `/var/log/apache2/poll/` with `%U` (path only, no query string), so no future long
+  URL can do this again regardless of what version clients run. Measured 817 -> 242 bytes/line,
+  ~330MB/day -> 82MB/day.
+
+Full closeout: privateContext/deliverables/closeouts/2026-08-05-vm-disk-reclamation-runeval-outage-pnpm-migration.md
