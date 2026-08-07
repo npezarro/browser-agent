@@ -512,3 +512,12 @@ not its resolution.**
 **Transferable:** when synthesising timing over a slow transport, measure the transport
 first. Delays that assume a free channel become the timeout when the channel costs more than
 the delay does.
+
+## browser-cli eval is active-tab-only on ext 2.12.1; use content-script commands with an explicit tabId
+On browser-agent extension 2.12.1, 'browser-cli.sh eval <code> <tabId>' returns {"value":"undefined","fallback":"cdp"} and never executes. eval only works against the ACTIVE tab (resolvedBy:activeTab), and the CDP fallback dies with 'Another debugger is already attached to the tab' once anything else has attached.
+
+Do NOT conclude the page is broken or that the relay is down. The content-script commands (state, text, read, html, queryall, fill, select, click, wait-for) DO honor an explicit tabId and are the correct API. 'state <tabId>' returns labelled inputs and buttons, which is usually all the form mapping you need; 'html <selector> <tabId>' gets you <option> values.
+
+Two corollaries learned the hard way:
+1. Under relay contention the server drops roughly every other response with 'Timeout waiting for browser response'. Retry, do not re-diagnose. A single batched 'fill' with a JSON of every selector is one round trip instead of twelve, and is dramatically more reliable than per-field set-input.
+2. 'focus <url-substring>' matches ANY Chrome tab, including ones the relay is not tracking. A loose needle like 'selfregister.aspx' silently focused a different library's tab. Always assert location.href contains your specific host before acting.
