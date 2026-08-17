@@ -542,27 +542,65 @@ EOF
   ensure)
     # Open URL in a tab if no existing tab matches. Returns the tabId.
     # Usage: browser-cli ensure <url> [wait_seconds]
+    #
+    # /agent/tabs is a SINGLE un-keyed registry: every key sees the union of
+    # tabs from BOTH browser profiles (main Chrome + alt Brave), while commands
+    # are routed per key to one profile's extension. So a URL match is NOT proof
+    # that the tab is ours to drive. Reusing a foreign tab returns an id that
+    # every later read times out on, and a caller that treats "no text" as
+    # benign then reports on a profile it never touched (2026-08: the alt
+    # keepalive certified the MAIN profile's claude.ai session for six weeks
+    # while the alt session aged out and logged itself out).
+    #
+    # Ownership is not knowable from the registry, so probe for it: a keyed
+    # `ping` reaches our extension only. Timeout => the tab is another
+    # profile's, so fall through and open our own.
     local_url="${1:?url required}"
     local_wait="${2:-6}"
-    # Check if any tab already has this URL (prefix match)
-    existing=$(curl -s "$API/agent/tabs" -H "$auth_header" | jq -r --arg u "$local_url" \
-      '[.tabs | to_entries[] | select(.value.url | startswith($u)) | .key] | first // empty')
+    # Candidate tabs matching this URL (prefix match), newest first.
+    candidates=$(curl -s "$API/agent/tabs" -H "$auth_header" | jq -r --arg u "$local_url" \
+      '[.tabs | to_entries[] | select(.value.url | startswith($u)) | .key] | sort | reverse | .[]')
+    existing=""
+    for cand in $candidates; do
+      if interactive "$cand" '{"action":"ping"}' 8 2>/dev/null \
+           | jq -e '.pong // .ok // .alive' >/dev/null 2>&1; then
+        existing="$cand"
+        break
+      fi
+    done
     if [ -n "$existing" ]; then
-      echo "{\"tabId\":\"$existing\",\"action\":\"reused\",\"url\":\"$local_url\"}"
+      echo "{\"tabId\":\"$existing\",\"action\":\"reused\",\"ownership\":\"verified\",\"url\":\"$local_url\"}"
     else
       # Open new tab (uses extension for background open if available, falls back to TM)
       interactive "" "$(jq -nc --arg u "$local_url" '{action:"openTabBackground", url:$u}')" > /dev/null 2>&1
-      # Wait for the new tab to register
+      # Wait for the new tab to register. Same ownership caveat: only accept a
+      # tab our own extension answers for, else a foreign tab that happens to
+      # match the URL wins the race and we hand back an undrivable id.
       for i in $(seq 1 "$local_wait"); do
         sleep 1
         found=$(curl -s "$API/agent/tabs" -H "$auth_header" | jq -r --arg u "$local_url" \
-          '[.tabs | to_entries[] | select(.value.url | startswith($u)) | .key] | first // empty')
-        if [ -n "$found" ]; then
-          echo "{\"tabId\":\"$found\",\"action\":\"opened\",\"url\":\"$local_url\"}"
-          exit 0
-        fi
+          '[.tabs | to_entries[] | select(.value.url | startswith($u)) | .key] | sort | reverse | .[]')
+        for cand in $found; do
+          if interactive "$cand" '{"action":"ping"}' 8 2>/dev/null \
+               | jq -e '.pong // .ok // .alive' >/dev/null 2>&1; then
+            echo "{\"tabId\":\"$cand\",\"action\":\"opened\",\"ownership\":\"verified\",\"url\":\"$local_url\"}"
+            exit 0
+          fi
+        done
       done
-      echo "{\"tabId\":null,\"action\":\"timeout\",\"url\":\"$local_url\"}" >&2
+      # Some origins (accounts.google.com, myaccount.google.com, chrome://)
+      # refuse content scripts outright, so `ping` can NEVER answer there and
+      # ownership is unknowable by design. Still hand back a matching tab: we
+      # just opened one, and returning nothing would open another on every run
+      # (the tab accumulation this verb exists to prevent). Flag it so callers
+      # do not mistake "could not verify" for "verified healthy".
+      unverified=$(curl -s "$API/agent/tabs" -H "$auth_header" | jq -r --arg u "$local_url" \
+        '[.tabs | to_entries[] | select(.value.url | startswith($u)) | .key] | sort | reverse | first // empty')
+      if [ -n "$unverified" ]; then
+        echo "{\"tabId\":\"$unverified\",\"action\":\"opened\",\"ownership\":\"unverified\",\"url\":\"$local_url\"}"
+        exit 0
+      fi
+      echo "{\"tabId\":null,\"action\":\"timeout\",\"ownership\":\"unverified\",\"url\":\"$local_url\"}" >&2
       exit 1
     fi
     ;;
