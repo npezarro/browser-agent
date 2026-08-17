@@ -193,6 +193,23 @@ case "$cmd" in
     curl -s "$API/agent/tabs" -H "$auth_header" | jq '{count, tabs: [.tabs | to_entries[] | {id: .key, url: .value.url, title: .value.title, age: (now - .value.receivedAt/1000 | floor | tostring + "s")}]}'
     ;;
 
+  btabs|browser-tabs)
+    # Tabs as the BROWSER sees them (chrome.tabs.query from the service worker),
+    # not as the relay's registry sees them. The registry is populated by
+    # content-script heartbeats, so it structurally cannot show a tab on any
+    # origin in manifest exclude_matches -- accounts.google.com, myaccount,
+    # mail, the banks. Those tabs exist and CDP can still drive them; they are
+    # merely invisible to `tabs`.
+    #
+    # That gap silently killed the OAuth login-wall recovery: since ext 2.11.0
+    # (2026-08-02) added the exclusions, lib/browser-google-login.sh scanned the
+    # registry for an accounts.google.com tab, always found none, and its whole
+    # account-chooser branch became dead code. Also unlike `tabs`, this reports
+    # only the calling key's own browser profile.
+    interactive "" '{"action":"queryTabs"}' 15 \
+      | jq '{count: (.tabs | length), tabs: [.tabs[] | {chromeTabId, url, title, active}]}'
+    ;;
+
   state)
     interactive "${1:-$DEFAULT_TAB}" '{"action":"getState"}'
     ;;
