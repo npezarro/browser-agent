@@ -1,5 +1,18 @@
 # progress.md — browser-agent
 
+## 2026-08-18 — ensure proves tab ownership; btabs added
+- `a9212c6` / `5541769`: `/agent/tabs` is one un-keyed registry (union of both profiles) while commands
+  route per key, so a URL match never proved ownership. `ensure` now probes with a keyed `ping` and opens
+  its own tab when the match belongs to another profile; content-script-blocked origins are returned
+  tagged `ownership: unverified`. This bug let the alt keepalive certify the MAIN profile for six weeks.
+- `839f016`: new `btabs` verb (chrome.tabs.query via the service worker). ext 2.11.0's `exclude_matches`
+  means a tab on an excluded origin can never enter the registry, which had silently made the OAuth
+  account-chooser recovery unreachable code since 2026-08-02.
+- Measured: an OAuth popup is a separate WINDOW; `focusTab` does not raise it, so it stays
+  `visibilityState: hidden` and CDP Input events are never delivered. Twelve cdp-clicks reported
+  `{"clicked": true}` with no page change; one `el.click()` advanced it.
+
+
 ## 2026-08-03 (phase 2) — humanized input tested against real bot protection: null result
 - Closed out phase 1's open item ("unproven against a site that scores behaviour") by actually
   running it. It half-closed: the test ran, the instrument had no resolution.
