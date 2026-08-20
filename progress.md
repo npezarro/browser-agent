@@ -1,5 +1,13 @@
 # progress.md — browser-agent
 
+## 2026-08-19 — ensure reuses tabs on content-script-excluded origins
+- An excluded origin never enters the registry, so the reuse check could only ever miss and `ensure`
+  opened a fresh tab per call (three leaked `myaccount.google.com` tabs found). Falls back to
+  `queryTabs` when the registry has ZERO candidates, returning `ownership:"profile"` -- per-profile
+  by construction. Not applied when candidates existed but failed the ping: that is a dead/foreign
+  tab and opening fresh is correct healing.
+- Verified: reused instead of a fourth tab; two further keepalive runs held the count at 1.
+
 ## 2026-08-18 — ensure proves tab ownership; btabs added
 - `a9212c6` / `5541769`: `/agent/tabs` is one un-keyed registry (union of both profiles) while commands
   route per key, so a URL match never proved ownership. `ensure` now probes with a keyed `ping` and opens

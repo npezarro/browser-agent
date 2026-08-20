@@ -450,3 +450,28 @@ Full closeout: privateContext/deliverables/closeouts/2026-08-02-travel-price-his
 - **Two behaviours worth knowing when driving OAuth popups** (both measured this session): a popup opens as a separate WINDOW, and `focusTab` activates a tab *within* its window without raising the window — so the popup stays at `visibilityState: "hidden"` and Chrome never delivers CDP `Input` events to it. `{"clicked": true}` means an event was dispatched, never that the page reacted. Use a JS `el.click()` inside popups; reserve trusted cdp-clicks for buttons that need user activation (anything calling `window.open`).
 - The `[SENSITIVE]` relay log line is the audit trail for `unsafeAllowSensitive`; confirmed live in the VM's PM2 log.
 - **State: working.** Only `browser-session-keepalive.sh` consumes `ensure`, so the ownership probe's regression surface is one caller. Full closeout: privateContext/deliverables/closeouts/2026-08-18-relogin-recovery-and-credential-expiry-alarm.md
+
+## 2026-08-19 — `ensure` reuses tabs on origins that can never register
+- An origin in the manifest's `exclude_matches` gets no content script, so no heartbeat, so **no
+  registry entry, ever**. `ensure`'s reuse check could therefore only ever miss there and opened a
+  fresh tab on every call: `browser-session-keepalive alt` touches `myaccount.google.com` daily and
+  had leaked one tab per day (three found in the profile).
+- Fixed by falling back to a browser-level query (`queryTabs`) when the registry has **zero**
+  candidates, returning a third ownership state: `ownership: "profile"`. `btabs` is per-profile by
+  construction (the query executes in OUR extension), so a match proves the tab is in our browser
+  even though the content script can never drive it. Callers must read `profile` as "ours, but not
+  readable" -- neither `verified` (drivable) nor `unverified` (cannot even prove whose it is).
+- **Deliberately not applied when candidates existed but failed the ping.** That is a foreign or
+  dead-content-script tab, and opening a fresh one is the correct healing behaviour. The
+  discriminator is "never registered" versus "registered but unreachable" -- getting this wrong
+  would trade a tab leak for reusing dead tabs, which is the older, worse bug.
+- Verified: `reused`/`profile` instead of a fourth tab, and two further keepalive runs left the
+  Google tab count at 1.
+
+### Open for this repo
+- `claude.ai` tabs still accumulate slowly in the alt profile (5 present). When a content script
+  dies, `ensure` correctly heals by opening a fresh tab and nothing closes the dead one. Safe fix is
+  for the caller to enumerate its own profile via `btabs` and close its extras; not done unattended
+  because these are tabs in a browser the user also uses.
+
+Full closeout: privateContext/deliverables/closeouts/2026-08-19-cron-verification-and-fleet-drift-audit.md
