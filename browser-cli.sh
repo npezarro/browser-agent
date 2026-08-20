@@ -585,6 +585,29 @@ EOF
         break
       fi
     done
+    # Zero registry candidates AND a browser-level match means the origin cannot
+    # register at all -- it is in the manifest's exclude_matches, so no content
+    # script, so no heartbeat, so no registry entry, ever. Reuse that tab instead
+    # of opening another one every single run: `browser-session-keepalive alt`
+    # touches myaccount.google.com daily and had been leaking one tab per day
+    # because the reuse check could only ever miss.
+    #
+    # Deliberately NOT applied when candidates existed but failed the ping: that
+    # is a foreign or dead-content-script tab, and opening a fresh one is the
+    # correct healing behaviour there. The discriminator is "never registered"
+    # versus "registered but unreachable".
+    #
+    # btabs is per-profile by construction (the query runs in OUR extension), so
+    # a match proves the tab is in our browser even though the content script can
+    # never drive it. That is a third state, not "verified" and not "unverified".
+    if [ -z "$existing" ] && [ -z "$candidates" ]; then
+      btab=$(interactive "" '{"action":"queryTabs"}' 15 2>/dev/null \
+        | jq -r --arg u "$local_url" '[.tabs[]? | select((.url // "") | startswith($u)) | .chromeTabId] | last // empty' 2>/dev/null)
+      if [ -n "$btab" ]; then
+        echo "{\"tabId\":\"$btab\",\"action\":\"reused\",\"ownership\":\"profile\",\"url\":\"$local_url\"}"
+        exit 0
+      fi
+    fi
     if [ -n "$existing" ]; then
       echo "{\"tabId\":\"$existing\",\"action\":\"reused\",\"ownership\":\"verified\",\"url\":\"$local_url\"}"
     else
