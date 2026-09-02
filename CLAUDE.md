@@ -59,10 +59,51 @@ Skipping step 2 means Chrome still sees the old code.
 
 - `BROWSER_AGENT_KEY` — Required. API key for auth on CLI/ext endpoints. Set in `.env` on VM and `~/.bashrc` locally.
 - `BROWSER_AGENT_KEY_ALT` — Optional. Second accepted API key for a separate Chrome profile (e.g., alt Google account). Server accepts a Bearer match against either key.
+- `BROWSER_AGENT_KEY_2`, `BROWSER_AGENT_KEY_3`, `BROWSER_AGENT_KEYS_EXTRA` (comma-separated) — Optional. Additional accepted keys for isolated instances spawned by `spawn-instance.sh`. They append AFTER `KEY`/`KEY_ALT` so the established key indices never shift (keep `KEY` and `KEY_ALT` set). Adding one needs a relay restart.
 - `BROWSER_AGENT_AGENT_SECRET` — Shared secret for agent endpoints (heartbeat, commands, result, log, blob). Sent via `X-Agent-Secret` header by content script and TM script. Backwards compatible: if unset, agent endpoints remain open.
 - `BROWSER_AGENT_AGENT_SECRET_ALT` — Optional. Second accepted agent secret, paired with `BROWSER_AGENT_KEY_ALT` for the alt-profile extension.
 - `BROWSER_AGENT_PORT` — Server port (default 3102)
 - `BROWSER_AGENT_URL` — CLI override for server URL (default `https://pezant.ca/api/browser-agent`)
+
+## Contention lock + isolated instances (2026-09-01)
+
+The relay routes commands **per key** to ONE browser profile's extension, and it
+*queues* commands per key so two callers do not corrupt each other's commands.
+What it does NOT prevent: two processes on the same profile fighting over the
+same tabs — the browser slows, page renders race, a CDP debugger can be detached
+mid-command. This bit the Staples buyer on 2026-09-01 (a concurrent deck-building
+session on the main lane; the buyer's cart gate tripped on a still-loading cart).
+
+Two tools address this; they compose:
+
+- **`ba-lock.sh`** — cooperative advisory lock for a profile lane (keyed by index,
+  `--key 0` = main Chrome). Money/irreversible jobs hold it while driving; peers
+  can `status` before starting heavy work. Atomic via `mkdir`; a dead-PID or
+  past-TTL holder is stale and gets taken over.
+  - `ba-lock.sh acquire --key 0 --owner NAME --pid $$ --wait 60 --ttl 900`
+  - `ba-lock.sh release --key 0 --owner NAME`  ·  `ba-lock.sh status --key 0`
+  - `ba-lock.sh with --key 0 --owner NAME -- CMD...` (acquire, run, release on exit)
+  - It is ADVISORY: only cooperating callers honor it. The Staples buyer
+    (`privateContext/recurring-tasks/scripts/staples-giftcard-buy.py`) is wired
+    to acquire key 0 and defer (transient, silent on `--retry`) if it is held.
+    Other buyers (peloton-cancel, smbx-withdraw) and the browser-keepalives
+    should adopt the same acquire/release around their browser driving.
+
+- **`spawn-instance.sh`** — launch a SEPARATE Windows browser (own persistent
+  profile + the extension) from WSL, so a job gets a truly isolated relay lane in
+  parallel with the main Chrome. `--dry-run` prints the exact launch command;
+  `--browser chrome|brave`, `--name LANE`, `--url URL`.
+  - **Constraint that shapes everything:** a separate profile is a fresh,
+    LOGGED-OUT session, and Chrome cannot run two OS processes on one profile (a
+    second *window* of the main profile shares its extension/key = no isolation).
+    So you get logged-in-but-shared OR isolated-but-logged-out. This lane suits
+    logged-out or self-authenticating work; a Staples-style OTP login per run is
+    the cost of using it for buyers.
+  - **Activation (one-time):** first launch → set the instance key + relay apiUrl
+    in the extension popup (per-profile storage) → add `BROWSER_AGENT_KEY_2` to
+    the relay `.env` and redeploy (`deploy.sh`, **during an idle window** — the
+    relay is shared on the VM) → `BROWSER_AGENT_KEY=<key2> browser-cli ext-status`
+    should show connected → drive with `BROWSER_AGENT_KEY=<key2> browser-cli ...`.
 
 ## Design Decisions
 

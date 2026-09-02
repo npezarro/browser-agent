@@ -978,13 +978,30 @@ if (require.main === module) {
   require("dotenv").config();
 
   const PORT = process.env.BROWSER_AGENT_PORT || 3102;
-  const API_KEYS = [process.env.BROWSER_AGENT_KEY, process.env.BROWSER_AGENT_KEY_ALT].filter(Boolean);
+  // Positional key list: idx 0 = main Chrome, idx 1 = alt Brave. Extra isolated
+  // instances (spawn-instance.sh) authenticate with additional keys that append
+  // AFTER those two so the established indices never shift. Keep KEY and KEY_ALT
+  // set in prod; a gap in the first two would renumber everything below it.
+  // Extra keys come from BROWSER_AGENT_KEYS_EXTRA (comma-separated) or the
+  // numbered BROWSER_AGENT_KEY_2 / _3 slots. Consumers route by key VALUE
+  // (Bearer token), so the numeric index stays internal to the relay.
+  const API_KEYS = [
+    process.env.BROWSER_AGENT_KEY,
+    process.env.BROWSER_AGENT_KEY_ALT,
+    ...(process.env.BROWSER_AGENT_KEYS_EXTRA || "")
+      .split(",").map((s) => s.trim()).filter(Boolean),
+    process.env.BROWSER_AGENT_KEY_2,
+    process.env.BROWSER_AGENT_KEY_3,
+  ].filter(Boolean);
   if (API_KEYS.length === 0) {
     console.error("[Browser Agent] BROWSER_AGENT_KEY not set in environment. Exiting.");
     process.exit(1);
   }
   if (process.env.BROWSER_AGENT_KEY_ALT) {
     console.log("[Browser Agent] Accepting alt account key (BROWSER_AGENT_KEY_ALT).");
+  }
+  if (API_KEYS.length > 2) {
+    console.log(`[Browser Agent] Accepting ${API_KEYS.length - 2} extra isolated-instance key(s).`);
   }
 
   const AGENT_SECRETS = [process.env.BROWSER_AGENT_AGENT_SECRET, process.env.BROWSER_AGENT_AGENT_SECRET_ALT].filter(Boolean);
