@@ -83,11 +83,16 @@ Two tools address this; they compose:
   - `ba-lock.sh acquire --key 0 --owner NAME --pid $$ --wait 60 --ttl 900`
   - `ba-lock.sh release --key 0 --owner NAME`  ·  `ba-lock.sh status --key 0`
   - `ba-lock.sh with --key 0 --owner NAME -- CMD...` (acquire, run, release on exit)
-  - It is ADVISORY: only cooperating callers honor it. The Staples buyer
-    (`privateContext/recurring-tasks/scripts/staples-giftcard-buy.py`) is wired
-    to acquire key 0 and defer (transient, silent on `--retry`) if it is held.
-    Other buyers (peloton-cancel, smbx-withdraw) and the browser-keepalives
-    should adopt the same acquire/release around their browser driving.
+  - It is ADVISORY: only cooperating callers honor it. Wired: the Staples buyer
+    (`privateContext/recurring-tasks/scripts/staples-giftcard-buy.py`, holds key
+    0, defers transient/silent-on-`--retry` if held) and
+    `scripts/browser-session-keepalive.sh` (main->key 0 / alt->key 1, yields with
+    a 5s wait + skip so the noon keepalive never clobbers a buy).
+  - NOT lane users, so the lock does not apply: peloton-cancel.sh,
+    smbx-withdraw.sh, smbx-confirm-email.sh each launch their OWN headless
+    Playwright Chromium (`chromium.launch({headless:true})`) — a separate
+    browser, already isolated from this relay; patent-check.sh is a plain HTTP
+    fetch. Only browser-agent-lane drivers (browser-cli / this relay) need it.
 
 - **`spawn-instance.sh`** — launch a SEPARATE Windows browser (own persistent
   profile + the extension) from WSL, so a job gets a truly isolated relay lane in
