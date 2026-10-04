@@ -567,3 +567,6 @@ Do NOT conclude the page is broken or that the relay is down. The content-script
 Two corollaries learned the hard way:
 1. Under relay contention the server drops roughly every other response with 'Timeout waiting for browser response'. Retry, do not re-diagnose. A single batched 'fill' with a JSON of every selector is one round trip instead of twelve, and is dramatically more reliable than per-field set-input.
 2. 'focus <url-substring>' matches ANY Chrome tab, including ones the relay is not tracking. A loose needle like 'selfregister.aspx' silently focused a different library's tab. Always assert location.href contains your specific host before acting.
+
+## browser-cli tabs returns a list; a reused tab can wedge (CDP Detached)
+Seen 2026-10-04. (1) 'browser-cli.sh tabs' returns {count, tabs:[{id,url,title,age}]}, a LIST. Consumers that call .items() on it (staples-giftcard-buy.py ensure_logged_in) silently find nothing. (2) A tab reused by 'ensure' can wedge: cdp-eval returns 'Detached while handling command', text times out, and the tab drops out of the 'tabs' list. Close it by chromeTabId and re-run; the job then passes. Also, right after a 'close' the tabs list keeps stale ids for a while.
