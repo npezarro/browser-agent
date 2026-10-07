@@ -309,7 +309,7 @@ Full closeout: privateContext/deliverables/closeouts/2026-08-01-browser-agent-fa
 - `resolveTabId()` fallback now filters to HTTP/HTTPS tabs only (was falling back to chrome:// tabs which can't be debugged)
 - `withDebugger()` validates tab URL before attaching debugger, returns clear error for internal pages
 - Verified working: CDP eval successfully reads hotel site content (Hilton), types into search fields, extracts structured pricing data
-- Windows extension path confirmed: `/mnt/c/Users/npeza/Documents/repos/browser-agent/extension/`
+- Windows extension path confirmed: `/mnt/c/Users/$WIN_USER/Documents/repos/browser-agent/extension/`
 - After WSL changes, must `git pull` in Windows repo (or `git reset --hard origin/master` if diverged) then reload extension
 
 Full session closeout: privateContext/deliverables/closeouts/2026-05-05-browser-agent-cdp-fix-hotel-research.md

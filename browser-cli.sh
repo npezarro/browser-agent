@@ -405,7 +405,7 @@ case "$cmd" in
         # anything that isn't an explicit `false` as a failure.
         case "$(echo "$status" | jq -r '.stale')" in
           false) exit 0 ;;
-          true)  echo "ERROR: reloaded but still stale — pull the Windows checkout at /mnt/c/Users/npeza/Documents/repos/browser-agent" >&2; exit 1 ;;
+          true)  echo "ERROR: reloaded but still stale — pull the Windows checkout Chrome loads the extension from (/mnt/c/Users/<you>/Documents/repos/browser-agent)" >&2; exit 1 ;;
           *)     echo "ERROR: extension did not report a version — it is still running pre-2.10.0 code; one manual chrome://extensions reload is needed to bootstrap" >&2; exit 1 ;;
         esac
       fi

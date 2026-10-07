@@ -47,8 +47,10 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# Windows identity. Override via WIN_USER if the Windows account is not 'npeza'.
-WIN_USER="${WIN_USER:-npeza}"
+# Windows identity: the Windows account name, asked of Windows itself so no
+# username is hardcoded. Override via WIN_USER.
+WIN_USER="${WIN_USER:-$(/mnt/c/Windows/System32/cmd.exe /c 'echo %USERNAME%' 2>/dev/null | tr -d '\r')}"
+[ -n "$WIN_USER" ] || { echo "spawn-instance: cannot resolve the Windows user; set WIN_USER" >&2; exit 1; }
 WSL_WINHOME="/mnt/c/Users/$WIN_USER"
 WINHOME="C:\\Users\\$WIN_USER"
 

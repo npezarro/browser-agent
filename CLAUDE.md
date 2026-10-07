@@ -30,7 +30,7 @@ bash deploy.sh   # copies files to VM, restarts PM2
 After deploy, reload the extension. **Prefer the remote path — no chrome://extensions visit needed:**
 
 ```bash
-cd /mnt/c/Users/npeza/Documents/repos/browser-agent && git pull   # Chrome loads from HERE, not WSL
+cd /mnt/c/Users/$WIN_USER/Documents/repos/browser-agent && git pull   # Chrome loads from HERE, not WSL
 browser-cli ext-reload                                            # chrome.runtime.reload() via the relay
 ```
 
@@ -49,9 +49,9 @@ Pulling the Windows checkout first is what makes it pick up new code rather than
 
 **Version bump:** Always increment the version in `extension/manifest.json` when changing extension files (background.js, content.js, popup.html). The user checks the version number in chrome://extensions after reloading to confirm the new code loaded. Use semver: patch for fixes, minor for new features.
 
-**CRITICAL: Extension lives on Windows filesystem.** Chrome loads the extension from `C:\Users\npeza\Documents\repos\browser-agent\extension\` (WSL path: `/mnt/c/Users/npeza/Documents/repos/browser-agent/extension/`). After changing extension files in WSL, you MUST:
+**CRITICAL: Extension lives on Windows filesystem.** Chrome loads the extension from `C:\Users\<WIN_USER>\Documents\repos\browser-agent\extension\` (WSL path: `/mnt/c/Users/$WIN_USER/Documents/repos/browser-agent/extension/`, where `WIN_USER=$(/mnt/c/Windows/System32/cmd.exe /c 'echo %USERNAME%' | tr -d '\r')`). After changing extension files in WSL, you MUST:
 1. `git push` from WSL
-2. `cd /mnt/c/Users/npeza/Documents/repos/browser-agent && git pull`
+2. `cd /mnt/c/Users/$WIN_USER/Documents/repos/browser-agent && git pull`
 3. Then ask user to reload the extension
 Skipping step 2 means Chrome still sees the old code.
 
